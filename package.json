@@ -1,0 +1,30 @@
+{
+  "name": "@bankrbot/bankr-router",
+  "version": "0.4.0",
+  "description": "Local BANKR-only smart router plugin for OpenClaw",
+  "type": "module",
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "skills",
+    ".env.example"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "openclaw": ">=0.4.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.3"
+  }
+}

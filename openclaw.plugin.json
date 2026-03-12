@@ -1,0 +1,35 @@
+{
+  "id": "bankr-router",
+  "name": "Bankr Router",
+  "version": "0.4.0",
+  "description": "Local BANKR-only smart router for OpenClaw",
+  "entry": "./dist/index.js",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "port": {
+        "type": "number",
+        "default": 8787
+      },
+      "host": {
+        "type": "string",
+        "default": "127.0.0.1"
+      },
+      "openclawConfigPath": {
+        "type": "string",
+        "default": "/home/tachiboss/.openclaw/openclaw.json"
+      },
+      "bankrProviderId": {
+        "type": "string",
+        "default": "bankr"
+      },
+      "routerProviderId": {
+        "type": "string",
+        "default": "bankr-router"
+      }
+    }
+  },
+  "skills": [
+    "./skills"
+  ]
+}
