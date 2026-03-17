@@ -41,7 +41,7 @@ npm run build
   "plugins": {
     "load": {
       "paths": [
-        "/home/tachiboss/tachi/workspace/openclawbankrrouter"
+        "/home/tachiboss/tachi/workspace/openclawbankrrouter"  <-- change this
       ]
     },
     "entries": {

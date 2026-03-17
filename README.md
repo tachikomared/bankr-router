@@ -20,6 +20,8 @@ npm run build
 
 ## Install (OpenClaw plugin)
 
+> **Note:** Replace `/home/tachiboss/tachi/workspace/openclawbankrrouter` with your actual repo path.
+
 ### Option A: load a local checkout via `plugins.load.paths`
 
 Add the repo path to `plugins.load.paths`, then enable it in `plugins.entries`:
@@ -29,7 +31,7 @@ Add the repo path to `plugins.load.paths`, then enable it in `plugins.entries`:
   "plugins": {
     "load": {
       "paths": [
-        "/home/tachiboss/tachi/workspace/openclawbankrrouter"
+        "/home/tachiboss/tachi/workspace/openclawbankrrouter"  <-- change this
       ]
     },
     "entries": {
