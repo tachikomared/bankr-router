@@ -1,11 +1,28 @@
 import http from "node:http";
-import { loadBankrCatalogFromOpenClaw } from "./catalog.js";
+import { buildCatalogLoadError, loadBankrCatalogWithDiscovery, isConfigNotFoundError, } from "./catalog.js";
 import { routeBankrRequest } from "./router/selector.js";
+import { resolveOpenclawConfigPath, requireOpenclawConfigPath, OpenclawConfigNotFoundError, } from "./config-path.js";
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const BANKR_UPSTREAM_BASE_URL = "https://llm.bankr.bot/v1";
+const DEBUG_ENABLED = process.env.BANKR_ROUTER_DEBUG === "1";
 function json(res, status, obj) {
     res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(obj, null, 2));
+}
+function debugLog(...args) {
+    if (!DEBUG_ENABLED)
+        return;
+    console.error("[bankr-router]", ...args);
+}
+function buildConfigNotFoundError(attemptedPaths) {
+    return {
+        error: "router_error",
+        message: "Could not locate OpenClaw config",
+        details: {
+            attemptedPaths,
+            hint: "Set plugins.entries.bankr-router.config.openclawConfigPath or OPENCLAW_CONFIG_PATH",
+        },
+    };
 }
 async function readBody(req) {
     const chunks = [];
@@ -111,12 +128,30 @@ function buildUpstreamHeaders(req, openclawBankrApiKey, explicitEnvKey) {
     }
     return headers;
 }
+function resolveDiagnostics(options) {
+    const resolved = resolveOpenclawConfigPath({
+        explicitPath: options.openclawConfigPath ?? null,
+    });
+    return {
+        selectedPath: resolved.selectedPath,
+        attemptedPaths: resolved.attemptedPaths,
+        bankrProviderId: options.bankrProviderId ?? "bankr",
+        routerProviderId: options.routerProviderId ?? "bankr-router",
+    };
+}
 export function startServer(options = {}) {
     const host = options.host ?? "127.0.0.1";
     const port = options.port ?? 8787;
-    const openclawConfigPath = options.openclawConfigPath ?? "/home/tachiboss/.openclaw/openclaw.json";
     const bankrProviderId = options.bankrProviderId ?? "bankr";
     const routerProviderId = options.routerProviderId ?? "bankr-router";
+    const configPath = options.openclawConfigPath ?? null;
+    if (DEBUG_ENABLED) {
+        const diag = resolveDiagnostics({
+            ...options,
+            openclawConfigPath: configPath ?? undefined,
+        });
+        debugLog("Config discovery", diag);
+    }
     const server = http.createServer(async (req, res) => {
         try {
             const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
@@ -137,6 +172,12 @@ export function startServer(options = {}) {
                     ],
                 });
             }
+            if (req.method === "GET" && url.pathname === "/v1/diagnostics") {
+                return json(res, 200, resolveDiagnostics({
+                    ...options,
+                    openclawConfigPath: configPath ?? undefined,
+                }));
+            }
             if (req.method !== "POST" ||
                 (url.pathname !== "/v1/chat/completions" && url.pathname !== "/v1/route")) {
                 return json(res, 404, { error: "not_found" });
@@ -144,8 +185,14 @@ export function startServer(options = {}) {
             const bodyBuffer = await readBody(req);
             const body = JSON.parse(bodyBuffer.toString("utf8"));
             const messages = Array.isArray(body?.messages) ? body.messages : [];
-            const loaded = loadBankrCatalogFromOpenClaw(openclawConfigPath, bankrProviderId);
-            const catalog = loaded.models;
+            const { selectedPath } = requireOpenclawConfigPath({
+                explicitPath: configPath ?? null,
+            });
+            const loaded = loadBankrCatalogWithDiscovery({
+                openclawConfigPath: selectedPath,
+                providerId: bankrProviderId,
+            });
+            const catalog = loaded.catalog.models;
             const requested = normalizeRequestedModel(body?.model, routerProviderId);
             const prompt = extractPromptText(messages);
             const systemPrompt = extractSystemPrompt(messages);
@@ -176,7 +223,7 @@ export function startServer(options = {}) {
                     ...(routeDecision ?? {}),
                 });
             }
-            const headers = buildUpstreamHeaders(req, loaded.bankrProviderApiKey, process.env.BANKR_LLM_KEY);
+            const headers = buildUpstreamHeaders(req, loaded.catalog.bankrProviderApiKey, process.env.BANKR_LLM_KEY);
             const upstreamBody = { ...body, model: selectedModel };
             const upstreamRes = await fetch(`${BANKR_UPSTREAM_BASE_URL}/chat/completions`, {
                 method: "POST",
@@ -191,6 +238,16 @@ export function startServer(options = {}) {
             res.end(responseText);
         }
         catch (error) {
+            if (isConfigNotFoundError(error) || error instanceof OpenclawConfigNotFoundError) {
+                const attemptedPaths = error instanceof OpenclawConfigNotFoundError ? error.attemptedPaths : [];
+                return json(res, 500, buildConfigNotFoundError(attemptedPaths));
+            }
+            const providerId = bankrProviderId;
+            const resolvedPath = configPath ?? "(auto-discovery)";
+            if (error instanceof Error) {
+                const response = buildCatalogLoadError(error, providerId, resolvedPath);
+                return json(res, 500, response);
+            }
             const message = error instanceof Error ? error.message : String(error);
             json(res, 500, { error: "router_error", message });
         }

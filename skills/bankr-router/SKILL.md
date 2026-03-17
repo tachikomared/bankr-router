@@ -1,19 +1,11 @@
 ---
 name: bankr-router
-description: Install, configure, and verify the local Bankr Router OpenClaw plugin for routing Bankr LLM Gateway traffic (auto/eco/premium). Includes setup, config paths, and troubleshooting for router-specific issues.
+description: Install, configure, and verify the local Bankr Router OpenClaw plugin that routes Bankr LLM requests. Use when updating OpenClaw config (plugins.load.paths + plugins.entries.bankr-router.config), configuring models.providers baseUrl, setting agents.defaults.model.primary/fallbacks, or troubleshooting router setup, ENOENT config errors, and stale builds.
 ---
 
 # Bankr Router (OpenClaw plugin skill)
 
 Local smart router that scores requests and routes them to Bankr LLM Gateway models. Inference still goes through BANKR; the router only selects the model.
-
-Developed by TachikomaRed together with its creator, smolemaru.
-
-## When to use
-
-- You want OpenClaw to route Bankr requests through `bankr-router/auto`, `bankr-router/eco`, or `bankr-router/premium`.
-- You need a local routing layer with profile-based selection before sending to Bankr.
-- You are installing this repo as a local OpenClaw plugin.
 
 ## Prerequisites
 
@@ -40,20 +32,25 @@ npm install
 npm run build
 ```
 
-## Install the local plugin
+## Load the plugin (current OpenClaw schema)
 
-Add this plugin entry to your OpenClaw config (path varies by install):
+### Option A: load via `plugins.load.paths`
 
 ```json
 {
   "plugins": {
+    "load": {
+      "paths": [
+        "/home/tachiboss/tachi/workspace/openclawbankrrouter"
+      ]
+    },
     "entries": {
       "bankr-router": {
-        "spec": "/home/tachiboss/tachi/workspace/openclawbankrrouter",
+        "enabled": true,
         "config": {
           "host": "127.0.0.1",
           "port": 8787,
-          "openclawConfigPath": "/home/tachiboss/.openclaw/openclaw.json",
+          "openclawConfigPath": null,
           "bankrProviderId": "bankr",
           "routerProviderId": "bankr-router"
         }
@@ -63,89 +60,93 @@ Add this plugin entry to your OpenClaw config (path varies by install):
 }
 ```
 
-### Add the provider block
+### Option B: install via CLI
+
+```bash
+openclaw plugins install /home/tachiboss/tachi/workspace/openclawbankrrouter
+# or link for dev
+openclaw plugins install -l /home/tachiboss/tachi/workspace/openclawbankrrouter
+```
+
+Then ensure `plugins.entries.bankr-router.enabled=true`.
+
+## Provider config (baseUrl)
 
 ```json
 {
   "models": {
     "providers": {
       "bankr-router": {
-        "baseURL": "http://127.0.0.1:8787/v1",
+        "baseUrl": "http://127.0.0.1:8787/v1",
         "apiKey": "local-router"
       }
-    },
-    "defaultModel": "bankr-router/auto"
+    }
   }
 }
 ```
 
-### Restart the gateway
+## Agent defaults (primary + fallbacks)
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "bankr-router/auto",
+        "fallbacks": ["bankr-router/eco"]
+      }
+    }
+  }
+}
+```
+
+## Config path auto-discovery
+
+If `openclawConfigPath` is null, the router checks:
+1. `OPENCLAW_CONFIG_PATH`
+2. `OPENCLAW_HOME/openclaw.json`
+3. sibling of `OPENCLAW_STATE_DIR`
+4. `~/.openclaw/openclaw.json`
+5. `~/tachi/.openclaw/openclaw.json`
+6. `./.openclaw/openclaw.json` up the parent chain
+
+Set an explicit path if you want to override:
+```json
+{ "plugins": { "entries": { "bankr-router": { "config": { "openclawConfigPath": "/path/to/openclaw.json" }}}}}
+```
+
+## Restart & verify
 
 ```bash
 openclaw gateway restart
-```
-
-### Verify
-
-```bash
 curl http://127.0.0.1:8787/health
+openclaw plugins list
+openclaw plugins info bankr-router
 openclaw models list | grep bankr-router
+openclaw models status
 ```
 
-## Quick profile switching
+### Smoke test (tiny)
 
 ```bash
-openclaw models set-default bankr-router/auto
-openclaw models set-default bankr-router/eco
-openclaw models set-default bankr-router/premium
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H "content-type: application/json" \
+  -d '{"model":"bankr-router/auto","messages":[{"role":"user","content":"say ok"}]}'
 ```
 
-## Common adjustments
+### Test from a fresh session
 
-You may need to change:
-- **Repo path** to where this project lives locally.
-- **OpenClaw config path** (e.g., `~/.openclaw/openclaw.json`).
-- **Router port** if 8787 is in use.
-- **Provider IDs** if you customized `bankr` or `bankr-router` in your config.
-- **Agent overrides** that bypass the router (see below).
+When validating routing behavior, start a fresh OpenClaw session (new chat/thread) to avoid cached model overrides or agent state.
 
 ## Troubleshooting
 
-- **Unknown model: bankr-router/auto**
-  - Ensure `models.providers.bankr-router` exists and `defaultModel` uses `bankr-router/auto`.
-
-- **Port already in use**
-  - Change `plugins.entries.bankr-router.config.port` and update `models.providers.bankr-router.baseURL` to match.
-
-- **Gateway restart loop**
-  - Check that `openclaw.plugin.json` exists in the repo root and your `spec` points to that root.
-
-- **Direct agent override bypassing router**
-  - Check per-agent overrides: `~/.openclaw/agents/<agentId>/agent/models.json` or `models.providers` in the global config.
-
-## Notes on skills & contribution
-
-- OpenClaw skills are folder-based with a required `SKILL.md` file.
-- You can inspect skills with:
-  ```bash
-  openclaw skills list
-  openclaw skills info bankr-router
-  openclaw skills check bankr-router
-  ```
-- Bankr community contributions use:
-  ```
-  your-provider/
-    your-skill/
-      SKILL.md
-      references/
-      scripts/
-  ```
-  Submit skills via PR to `BankrBot/skills`.
-
-## OpenClaw config paths
-
-Common config locations (may differ):
-- `~/.openclaw/openclaw.json`
-- `/home/tachiboss/.openclaw/openclaw.json`
-
-If your OpenClaw config or provider IDs are customized, update the JSON blocks above accordingly.
+- **ENOENT / could not locate OpenClaw config**
+  - Set `plugins.entries.bankr-router.config.openclawConfigPath` or `OPENCLAW_CONFIG_PATH`.
+- **Plugin not discovered**
+  - Ensure repo path is in `plugins.load.paths` or reinstall via `openclaw plugins install`.
+- **Unknown model**
+  - Ensure `models.providers.bankr-router` exists and any allowlist in `agents.defaults.models` includes the router models.
+- **baseURL vs baseUrl**
+  - Use `baseUrl` (lowercase l). `baseURL` is obsolete.
+- **Stale dist**
+  - Run `npm run build` after changes and restart the gateway.

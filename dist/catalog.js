@@ -1,5 +1,6 @@
 import fs from "node:fs";
-export function loadBankrCatalogFromOpenClaw(openclawPath = "/home/tachiboss/.openclaw/openclaw.json", providerId = "bankr") {
+import { requireOpenclawConfigPath, OpenclawConfigNotFoundError, } from "./config-path.js";
+export function loadBankrCatalogFromOpenClaw(openclawPath, providerId = "bankr") {
     const raw = JSON.parse(fs.readFileSync(openclawPath, "utf8"));
     const provider = raw?.models?.providers?.[providerId];
     const models = provider?.models;
@@ -17,5 +18,31 @@ export function loadBankrCatalogFromOpenClaw(openclawPath = "/home/tachiboss/.op
     return {
         bankrProviderApiKey: typeof provider.apiKey === "string" ? provider.apiKey : undefined,
         models,
+    };
+}
+export function loadBankrCatalogWithDiscovery(options) {
+    const { selectedPath, attemptedPaths } = requireOpenclawConfigPath({
+        explicitPath: options.openclawConfigPath ?? null,
+        cwd: options.cwd,
+    });
+    const providerId = options.providerId ?? "bankr";
+    return {
+        catalog: loadBankrCatalogFromOpenClaw(selectedPath, providerId),
+        openclawConfigPath: selectedPath,
+        attemptedPaths,
+    };
+}
+export function isConfigNotFoundError(err) {
+    return err instanceof OpenclawConfigNotFoundError;
+}
+export function buildCatalogLoadError(err, providerId, openclawConfigPath) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+        error: "router_error",
+        message: `Failed to load Bankr provider catalog: ${message}`,
+        details: {
+            providerId,
+            openclawConfigPath,
+        },
     };
 }
