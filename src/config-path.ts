@@ -83,11 +83,7 @@ export function resolveOpenclawConfigPath(
   }
 
   if (!selectedPath) {
-    selectedPath = pushCandidate("~/.openclaw/openclaw.json");
-  }
-
-  if (!selectedPath) {
-    selectedPath = pushCandidate("~/tachi/.openclaw/openclaw.json");
+    selectedPath = pushCandidate(path.join(os.homedir(), ".openclaw", "openclaw.json"));
   }
 
   if (!selectedPath) {

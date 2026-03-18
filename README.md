@@ -9,18 +9,17 @@ Developed by TachikomaRed together with its creator, smolemaru.
 - Node.js 20+
 - OpenClaw >= 0.4.0
 - Bankr provider installed in OpenClaw (`bankr llm setup openclaw --install`)
+- Bankr API key available via OpenClaw config or `BANKR_LLM_KEY`
 
 ## Install (local dev)
 
 ```bash
-cd /home/tachiboss/tachi/workspace/openclawbankrrouter
+cd /path/to/openclawbankrrouter
 npm install
 npm run build
 ```
 
 ## Install (OpenClaw plugin)
-
-> **Note:** Replace `/home/tachiboss/tachi/workspace/openclawbankrrouter` with your actual repo path.
 
 ### Option A: load a local checkout via `plugins.load.paths`
 
@@ -31,7 +30,7 @@ Add the repo path to `plugins.load.paths`, then enable it in `plugins.entries`:
   "plugins": {
     "load": {
       "paths": [
-        "/home/tachiboss/tachi/workspace/openclawbankrrouter"  <-- change this
+        "/path/to/openclawbankrrouter"
       ]
     },
     "entries": {
@@ -53,9 +52,9 @@ Add the repo path to `plugins.load.paths`, then enable it in `plugins.entries`:
 ### Option B: install via CLI (copies or links the plugin)
 
 ```bash
-openclaw plugins install /home/tachiboss/tachi/workspace/openclawbankrrouter
+openclaw plugins install /path/to/openclawbankrrouter
 # or
-openclaw plugins install -l /home/tachiboss/tachi/workspace/openclawbankrrouter
+openclaw plugins install -l /path/to/openclawbankrrouter
 ```
 
 Then ensure the plugin entry is enabled in `plugins.entries.bankr-router.enabled` as above.
@@ -85,10 +84,16 @@ Then ensure the plugin entry is enabled in `plugins.entries.bankr-router.enabled
 }
 ```
 
-## Verify
+> **Note:** This router expects a Bankr provider configured in your OpenClaw config. The router will read its model catalog from `models.providers.bankr` (or the provider ID you set).
+
+## Verify (safe, repo-local)
 
 ```bash
 curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:8787/v1/diagnostics
+curl http://127.0.0.1:8787/v1/route \
+  -H "content-type: application/json" \
+  -d '{"model":"bankr-router/auto","messages":[{"role":"user","content":"say ok"}]}'
 openclaw plugins list
 openclaw models list | grep bankr-router
 ```
@@ -123,5 +128,25 @@ It documents setup steps, config paths to adjust, and common failure modes.
 | `baseURL` vs `baseUrl` mismatch | old config key | Use `baseUrl` (lowercase `l`) under `models.providers`. |
 | Large session timeout | OpenClaw timeout exceeded | Reduce prompt size or increase OpenClaw timeout settings. |
 | Router health OK but inference fails | upstream auth or provider catalog mismatch | Check Bankr API key and `bankrProviderId` in the config. |
-| Router bypassed | per-agent model override | Remove per-agent overrides in `agents.list[].model` or `~/.openclaw/agents/<id>/agent/models.json`. |
-| Stale dist not rebuilt | plugin JS not rebuilt | Run `npm run build`, then restart gateway. |
+| Router bypassed | per-agent model override | Remove per-agent overrides in `agents.list[].model` or agent-level config files (location varies by install). |
+| Stale dist not rebuilt | plugin JS not rebuilt | Run `npm run build`, then restart gateway (if you control it). |
+
+### Diagnostics pointers
+
+- `/v1/diagnostics` shows the selected OpenClaw config path + attempted paths.
+- `/health` shows router reachability only; it does not validate upstream auth or latency.
+- If `/health` is green but completions fail, check upstream Bankr credentials and model catalog.
+
+### Safe troubleshooting (no service restarts required)
+
+If you cannot restart services, you can still verify configuration by:
+
+1. Checking `/v1/diagnostics` output for config discovery.
+2. Confirming your OpenClaw config has `models.providers.bankr-router.baseUrl`.
+3. Using `/v1/route` to see routing decisions without upstream inference.
+
+### Router vs upstream failure signals
+
+- Router failures: `router_error` in the response with details about config discovery or catalog loading.
+- Upstream failures: HTTP errors from `https://llm.bankr.bot` or auth failures (usually `401/403`).
+- If router `/health` is OK but upstream fails, recheck Bankr API key and provider catalog.

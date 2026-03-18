@@ -18,16 +18,15 @@ Local smart router that scores requests and routes them to Bankr LLM Gateway mod
 
 ## Local project location
 
-Default repo path:
+Use your local repo path, for example:
 ```
-/home/tachiboss/tachi/workspace/openclawbankrrouter
+/path/to/openclawbankrrouter
 ```
-Adjust this path if your repo is elsewhere.
 
 ## Install & build
 
 ```bash
-cd /home/tachiboss/tachi/workspace/openclawbankrrouter
+cd /path/to/openclawbankrrouter
 npm install
 npm run build
 ```
@@ -41,7 +40,7 @@ npm run build
   "plugins": {
     "load": {
       "paths": [
-        "/home/tachiboss/tachi/workspace/openclawbankrrouter"  <-- change this
+        "/path/to/openclawbankrrouter"
       ]
     },
     "entries": {
@@ -63,9 +62,9 @@ npm run build
 ### Option B: install via CLI
 
 ```bash
-openclaw plugins install /home/tachiboss/tachi/workspace/openclawbankrrouter
+openclaw plugins install /path/to/openclawbankrrouter
 # or link for dev
-openclaw plugins install -l /home/tachiboss/tachi/workspace/openclawbankrrouter
+openclaw plugins install -l /path/to/openclawbankrrouter
 ```
 
 Then ensure `plugins.entries.bankr-router.enabled=true`.
@@ -107,19 +106,21 @@ If `openclawConfigPath` is null, the router checks:
 2. `OPENCLAW_HOME/openclaw.json`
 3. sibling of `OPENCLAW_STATE_DIR`
 4. `~/.openclaw/openclaw.json`
-5. `~/tachi/.openclaw/openclaw.json`
-6. `./.openclaw/openclaw.json` up the parent chain
+5. `./.openclaw/openclaw.json` up the parent chain
 
 Set an explicit path if you want to override:
 ```json
 { "plugins": { "entries": { "bankr-router": { "config": { "openclawConfigPath": "/path/to/openclaw.json" }}}}}
 ```
 
-## Restart & verify
+## Verify
 
 ```bash
-openclaw gateway restart
 curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:8787/v1/diagnostics
+curl http://127.0.0.1:8787/v1/route \
+  -H "content-type: application/json" \
+  -d '{"model":"bankr-router/auto","messages":[{"role":"user","content":"say ok"}]}'
 openclaw plugins list
 openclaw plugins info bankr-router
 openclaw models list | grep bankr-router
@@ -149,4 +150,10 @@ When validating routing behavior, start a fresh OpenClaw session (new chat/threa
 - **baseURL vs baseUrl**
   - Use `baseUrl` (lowercase l). `baseURL` is obsolete.
 - **Stale dist**
-  - Run `npm run build` after changes and restart the gateway.
+  - Run `npm run build` after changes and restart the gateway (if you control it).
+
+### Router vs upstream failures
+
+- Router errors return `router_error` with config discovery or catalog details.
+- Upstream Bankr errors usually return `401/403` or `5xx` from `https://llm.bankr.bot`.
+- If `/health` is green but completions fail, recheck Bankr API key and provider catalog.
