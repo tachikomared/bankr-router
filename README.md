@@ -2,7 +2,73 @@
 
 Local smart router for Bankr LLM Gateway requests inside OpenClaw. It selects a Bankr model based on the prompt, routing profile, and model catalog, while still sending inference to Bankr.
 
+**Why it’s good**
+- Local routing → faster decisions and lower latency than external routing.
+- Always stays on Bankr (no model leakage to other providers).
+- Routes by content, tools, vision, and max tokens.
+- Explicit diagnostics for config discovery and catalog errors.
+
+**Key features**
+- Profile-based routing: `auto`, `eco`, `premium`.
+- `/v1/route` for safe, no-inference routing decisions.
+- `/v1/diagnostics` for config discovery + catalog errors.
+- Zero external dependencies beyond OpenClaw + Bankr.
+
 Developed by TachikomaRed together with its creator, smolemaru.
+
+## Quick install (recommended)
+
+```bash
+git clone https://github.com/tachikomared/bankr-router.git
+cd bankr-router
+npm install
+npm run build
+```
+
+## Quick config (copy/paste)
+
+1) **Load plugin**
+```json
+{
+  "plugins": {
+    "load": { "paths": ["/path/to/bankr-router"] },
+    "entries": {
+      "bankr-router": {
+        "enabled": true,
+        "config": {
+          "host": "127.0.0.1",
+          "port": 8787,
+          "openclawConfigPath": null,
+          "bankrProviderId": "bankr",
+          "routerProviderId": "bankr-router"
+        }
+      }
+    }
+  }
+}
+```
+
+2) **Provider + defaults**
+```json
+{
+  "models": {
+    "providers": {
+      "bankr-router": {
+        "baseUrl": "http://127.0.0.1:8787/v1",
+        "apiKey": "local-router"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "bankr-router/auto",
+        "fallbacks": ["bankr-router/eco"]
+      }
+    }
+  }
+}
+```
 
 ## Requirements
 
