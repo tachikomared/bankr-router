@@ -1,35 +1,87 @@
 ---
 name: bankr-router
-description: Install, configure, and verify the local Bankr Router OpenClaw plugin that routes Bankr LLM requests. Use when updating OpenClaw config (plugins.load.paths + plugins.entries.bankr-router.config), configuring models.providers baseUrl, setting agents.defaults.model.primary/fallbacks, or troubleshooting router setup, ENOENT config errors, and stale builds.
+description: Install the Bankr Router OpenClaw plugin for intelligent local routing to Bankr LLM Gateway. Achieve up to 90% cost savings with 15-dimensional scoring across multilingual prompts. Auto-selects optimal models (eco/premium/auto) while keeping inference on Bankr.
 ---
 
 # Bankr Router (OpenClaw plugin skill)
 
-Local smart router that scores requests and routes them to Bankr LLM Gateway models. Inference still goes through BANKR; the router only selects the model.
+**Local smart router for Bankr LLM Gateway — maximum savings, zero leakage.**
+
+## Why Install This
+
+- **Up to 90% cost reduction** via intelligent local routing
+- **15-dimensional scoring** — prompt complexity, tools, vision, tokens, language, domain
+- **Multilingual optimization** — routes based on language-specific model performance
+- **Zero provider leakage** — all inference stays on Bankr
+- **3 routing profiles** — `eco` (cheap), `premium` (quality), `auto` (balanced)
+- **Local diagnostics** — `/v1/diagnostics` and `/v1/route` for troubleshooting without inference
+
+## Quick Install (Agent Instructions)
+
+When a user says "install bankr-router" or shares this repo link, follow these steps:
+
+### Step 1: Clone & Build
+```bash
+git clone https://github.com/tachikomared/bankr-router.git ~/bankr-router
+cd ~/bankr-router
+npm install
+npm run build
+```
+
+### Step 2: Add to OpenClaw Config
+Edit your `openclaw.json` (usually at `~/.openclaw/openclaw.json`):
+
+```json
+{
+  "plugins": {
+    "load": {
+      "paths": ["~/bankr-router"]
+    },
+    "entries": {
+      "bankr-router": {
+        "enabled": true,
+        "config": {
+          "host": "127.0.0.1",
+          "port": 8787,
+          "openclawConfigPath": null,
+          "bankrProviderId": "bankr",
+          "routerProviderId": "bankr-router"
+        }
+      }
+    }
+  },
+  "models": {
+    "providers": {
+      "bankr-router": {
+        "baseUrl": "http://127.0.0.1:8787/v1",
+        "apiKey": "local-router"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "bankr-router/auto",
+        "fallbacks": ["bankr-router/eco"]
+      }
+    }
+  }
+}
+```
+
+### Step 3: Restart & Verify
+```bash
+# Restart your OpenClaw gateway
+curl http://127.0.0.1:8787/health
+openclaw models list | grep bankr-router
+```
 
 ## Prerequisites
 
 - Node.js 20+
 - OpenClaw >= 0.4.0
-- Bankr provider installed in OpenClaw:
-  ```bash
-  bankr llm setup openclaw --install
-  ```
-
-## Local project location
-
-Use your local repo path, for example:
-```
-/path/to/openclawbankrrouter
-```
-
-## Install & build
-
-```bash
-cd /path/to/openclawbankrrouter
-npm install
-npm run build
-```
+- Bankr provider installed (`bankr llm setup openclaw --install`)
+- Bankr API key in config or `BANKR_LLM_KEY` env var
 
 ## Load the plugin (current OpenClaw schema)
 
