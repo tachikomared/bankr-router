@@ -32,7 +32,7 @@ function rotateIfNeeded() {
 export function hashPrompt(prompt) {
     return crypto.createHash("sha256").update(prompt).digest("hex");
 }
-export function logRequest(record) {
+export function logRequest(record, severity = "info") {
     const payload = {
         ts: record.ts,
         plannedModel: record.plannedModel,
@@ -47,9 +47,18 @@ export function logRequest(record) {
         structuredOutput: record.structuredOutput ?? false,
         codeHeavy: record.codeHeavy ?? false,
         promptHash: record.promptHash,
+        abortSource: record.abortSource ?? null,
     };
     const line = JSON.stringify(payload);
-    console.error(line);
+    if (severity === "error") {
+        console.error(line);
+    }
+    else if (severity === "warn") {
+        console.warn(line);
+    }
+    else {
+        console.log(line);
+    }
     try {
         ensureLogDir();
         rotateIfNeeded();

@@ -16,7 +16,10 @@ export type RouterLogRecord = {
   structuredOutput?: boolean;
   codeHeavy?: boolean;
   promptHash?: string;
+  abortSource?: string | null;
 };
+
+export type LogSeverity = "info" | "warn" | "error";
 
 const LOG_DIR = process.env.BANKR_ROUTER_LOG_DIR || path.join(process.cwd(), "logs");
 const LOG_FILE = "requests.log";
@@ -53,7 +56,7 @@ export function hashPrompt(prompt: string): string {
   return crypto.createHash("sha256").update(prompt).digest("hex");
 }
 
-export function logRequest(record: RouterLogRecord) {
+export function logRequest(record: RouterLogRecord, severity: LogSeverity = "info") {
   const payload = {
     ts: record.ts,
     plannedModel: record.plannedModel,
@@ -68,10 +71,17 @@ export function logRequest(record: RouterLogRecord) {
     structuredOutput: record.structuredOutput ?? false,
     codeHeavy: record.codeHeavy ?? false,
     promptHash: record.promptHash,
+    abortSource: record.abortSource ?? null,
   };
 
   const line = JSON.stringify(payload);
-  console.error(line);
+  if (severity === "error") {
+    console.error(line);
+  } else if (severity === "warn") {
+    console.warn(line);
+  } else {
+    console.log(line);
+  }
 
   try {
     ensureLogDir();

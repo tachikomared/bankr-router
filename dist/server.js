@@ -339,13 +339,22 @@ export function startServer(options = {}) {
             let upstreamModel = null;
             const attemptedModels = [];
             const attemptStatuses = [];
+            let abortSource = null;
+            let abortedByClient = false;
             const startAt = Date.now();
+            req.on("aborted", () => {
+                abortedByClient = true;
+                abortSource = abortSource ?? "client_disconnected";
+            });
             while (attempt < maxAttempts && attempt < chain.length) {
                 const modelToTry = chain[attempt] ?? plannedModel;
                 attemptedModels.push(modelToTry);
                 const attemptBody = { ...upstreamBody, model: modelToTry };
                 const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), upstreamTimeout);
+                const timeout = setTimeout(() => {
+                    abortSource = abortSource ?? "request_timeout";
+                    controller.abort();
+                }, upstreamTimeout);
                 try {
                     lastResponse = await fetch(`${BANKR_UPSTREAM_BASE_URL}/chat/completions`, {
                         method: "POST",
@@ -379,7 +388,10 @@ export function startServer(options = {}) {
                         }
                     }
                 }
-                catch {
+                catch (err) {
+                    if (err?.name === "AbortError") {
+                        abortSource = abortSource ?? "upstream_fetch_aborted";
+                    }
                     lastStatus = 0;
                     attemptStatuses.push(0);
                     responseText = "";
@@ -433,6 +445,7 @@ export function startServer(options = {}) {
                             res.end();
                         },
                         abort() {
+                            abortSource = abortSource ?? "stream_cancelled";
                             res.end();
                         },
                     }));
@@ -462,6 +475,19 @@ export function startServer(options = {}) {
                 success: finalStatus < 400,
                 statusCode: finalStatus,
             });
+            let severity = "info";
+            if (finalStatus >= 200 && finalStatus < 300) {
+                severity = "info";
+            }
+            else if (finalStatus >= 400 && finalStatus < 500) {
+                severity = shouldRetry(finalStatus, retryOnStatuses) ? "warn" : "error";
+            }
+            else if (finalStatus >= 500) {
+                severity = "error";
+            }
+            if (abortedByClient && finalStatus < 400) {
+                severity = "warn";
+            }
             logRequest({
                 ts: new Date().toISOString(),
                 plannedModel: plannedModel ?? undefined,
@@ -476,7 +502,8 @@ export function startServer(options = {}) {
                 structuredOutput,
                 codeHeavy: routeDecision?.codeHeavy ?? false,
                 promptHash: hashPrompt(prompt),
-            });
+                abortSource,
+            }, severity);
             // Reliability: record each attempted model once
             attemptedModels.forEach((modelId, index) => {
                 const status = attemptStatuses[index] ?? finalStatus;
@@ -497,17 +524,39 @@ export function startServer(options = {}) {
             }
         }
         catch (error) {
+            let abortSource = null;
+            if (error && typeof error === "object") {
+                const errName = error.name;
+                if (errName === "AbortError") {
+                    abortSource = "openclaw_cancellation";
+                }
+            }
             if (isConfigNotFoundError(error) || error instanceof OpenclawConfigNotFoundError) {
                 const attemptedPaths = error instanceof OpenclawConfigNotFoundError ? error.attemptedPaths : [];
+                logRequest({
+                    ts: new Date().toISOString(),
+                    statusCode: 500,
+                    abortSource,
+                }, "error");
                 return json(res, 500, buildConfigNotFoundError(attemptedPaths));
             }
             const providerId = bankrProviderId;
             const resolvedPath = configPath ?? "(auto-discovery)";
             if (error instanceof Error) {
                 const response = buildCatalogLoadError(error, providerId, resolvedPath);
+                logRequest({
+                    ts: new Date().toISOString(),
+                    statusCode: 500,
+                    abortSource,
+                }, "error");
                 return json(res, 500, response);
             }
             const message = error instanceof Error ? error.message : String(error);
+            logRequest({
+                ts: new Date().toISOString(),
+                statusCode: 500,
+                abortSource,
+            }, "error");
             json(res, 500, { error: "router_error", message });
         }
     });
