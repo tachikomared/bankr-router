@@ -122,6 +122,9 @@ export type RoutingDecision = {
   baselineCost?: number;
   savings?: number;
   agenticScore?: number;
+  toolsDetected?: boolean;
+  structuredOutput?: boolean;
+  codeHeavy?: boolean;
 };
 
 export type ConversationState = {
@@ -140,4 +143,19 @@ export type RequestStat = {
   status: number;
   retried: number;
   inherited: boolean;
+  toolsDetected?: boolean;
+  structuredOutput?: boolean;
+  codeHeavy?: boolean;
+};
+
+export type ModelReliability = {
+  successCount: number;
+  errorCount: number;
+  timeoutCount: number;
+  rateLimitCount: number;
+  totalRequests: number;
+  avgLatencyMs: number;
+  toolSuccessCount: number;
+  structuredSuccessCount: number;
+  lastUpdatedAt: number;
 };

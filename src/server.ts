@@ -19,6 +19,7 @@ import {
   setConversationState,
 } from "./context.js";
 import { getHealthSummary, getStats, recordRequest } from "./stats.js";
+import { recordSuccess, recordError } from "./reliability.js";
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const BANKR_UPSTREAM_BASE_URL = "https://llm.bankr.bot/v1";
@@ -161,6 +162,21 @@ function hasVision(messages: any[]): boolean {
 
 function hasTools(body: any): boolean {
   return Array.isArray(body?.tools) && body.tools.length > 0;
+}
+
+function isStructuredOutput(body: any): boolean {
+  const format = body?.response_format ?? body?.response_format?.type;
+  if (typeof format === "string") {
+    return format.toLowerCase() === "json" || format.toLowerCase() === "json_object";
+  }
+  const prompt = extractPromptText(body?.messages ?? []);
+  const system = extractSystemPrompt(body?.messages ?? []);
+  return (
+    (system ?? "").toLowerCase().includes("json") ||
+    (system ?? "").toLowerCase().includes("yaml") ||
+    prompt.toLowerCase().includes("json") ||
+    prompt.toLowerCase().includes("yaml")
+  );
 }
 
 function normalizeRequestedModel(
@@ -360,6 +376,7 @@ export function startServer(options: StartServerOptions = {}) {
           config: routerConfig ?? DEFAULT_BANKR_ROUTING_CONFIG,
           inheritedTier,
           inheritedConfidence,
+          structuredOutput: isStructuredOutput(body),
         });
 
         selectedModel = routeDecision.model;
@@ -468,7 +485,16 @@ export function startServer(options: StartServerOptions = {}) {
         status: finalStatus,
         retried,
         inherited: Boolean(routeDecision?.inherited),
+        toolsDetected: hasTools(body),
+        structuredOutput: isStructuredOutput(body),
+        codeHeavy: routeDecision?.codeHeavy ?? false,
       });
+
+      if (finalStatus < 400) {
+        recordSuccess(selectedModel, latencyMs, hasTools(body), isStructuredOutput(body));
+      } else {
+        recordError(selectedModel, finalStatus);
+      }
 
       if (routeDecision?.tier) {
         setConversationState(sessionId, {

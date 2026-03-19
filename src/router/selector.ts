@@ -164,6 +164,32 @@ function codeAffinityBonus(modelId: string, codeHeavy: boolean): number {
   return 0;
 }
 
+function rerankForCodeHeavy(ranked: RankedCandidate[], catalog: Map<string, BankrModel>, profile: RoutingProfile): RankedCandidate[] {
+  const codeSpecialized = ranked.filter((candidate) => {
+    const id = candidate.id.toLowerCase();
+    if (profile === "eco" && id.includes("coder")) return true;
+    if (profile === "premium" && id.includes("codex")) return true;
+    return false;
+  });
+
+  if (codeSpecialized.length === 0) return ranked;
+
+  const standardModels = ranked.filter((candidate) => !codeSpecialized.includes(candidate));
+  return [...codeSpecialized, ...standardModels];
+}
+
+function rerankForToolAndStructured(ranked: RankedCandidate[], catalog: Map<string, BankrModel>, tools: boolean, structured: boolean): RankedCandidate[] {
+  if (!tools && !structured) return ranked;
+
+  const strongModels = ranked.filter((candidate) => {
+    const model = catalog.get(candidate.id);
+    return model?.supportsTools !== false && model?.contextWindow && model?.contextWindow >= 128000;
+  });
+
+  const weakModels = ranked.filter((candidate) => !strongModels.includes(candidate));
+  return [...strongModels, ...weakModels];
+}
+
 function pickCheapestInChain(
   chain: string[],
   catalog: Map<string, BankrModel>,
@@ -204,6 +230,7 @@ export function routeBankrRequest(args: {
   config?: RoutingConfig;
   inheritedTier?: Tier | null;
   inheritedConfidence?: number;
+  structuredOutput?: boolean;
 }): RoutingDecision {
   const {
     prompt,
@@ -215,7 +242,8 @@ export function routeBankrRequest(args: {
     catalog,
     config = DEFAULT_BANKR_ROUTING_CONFIG,
     inheritedTier = null,
-    inheritedConfidence = 0
+    inheritedConfidence = 0,
+    structuredOutput = false
   } = args;
 
   const catalogMap = new Map(catalog.map((m) => [m.id, m]));
@@ -237,18 +265,18 @@ export function routeBankrRequest(args: {
     agenticScore = ruleResult.agenticScore;
     signals = ruleResult.signals;
 
-    const structured =
+    const structuredDetected = structuredOutput ||
       (systemPrompt ?? "").toLowerCase().includes("json") ||
       (systemPrompt ?? "").toLowerCase().includes("yaml") ||
       prompt.toLowerCase().includes("json") ||
       prompt.toLowerCase().includes("yaml");
 
-    if (structured) {
+    if (structuredDetected) {
       tier = minTier(tier, config.overrides.structuredOutputMinTier);
     }
 
     const followupConfig = config.followup;
-    if (!structured && followupConfig?.enabled && inheritedTier && inheritedConfidence >= followupConfig.inheritConfidenceFloor) {
+    if (!structuredDetected && followupConfig?.enabled && inheritedTier && inheritedConfidence >= followupConfig.inheritConfidenceFloor) {
       tier = inheritedTier;
       confidence = Math.max(confidence, inheritedConfidence);
       inherited = true;
@@ -272,11 +300,18 @@ export function routeBankrRequest(args: {
     systemPrompt
   );
 
-  if (!ranked.length) {
+  const codeHeavy = looksCodeHeavy(prompt, systemPrompt);
+
+  let reranked = ranked;
+  reranked = rerankForCodeHeavy(reranked, catalogMap, profile);
+  const isStructured = structuredOutput || (systemPrompt ?? "").toLowerCase().includes("json") || prompt.toLowerCase().includes("json") || prompt.toLowerCase().includes("yaml");
+  reranked = rerankForToolAndStructured(reranked, catalogMap, hasTools, isStructured);
+
+  if (!reranked.length) {
     throw new Error(`No eligible BANKR models with finite cost in tier ${tier}`);
   }
 
-  const selected = ranked[0].id;
+  const selected = reranked[0].id;
   const baselineModel =
     catalogMap.get("claude-opus-4.6") ??
     catalogMap.get("claude-opus-4.5") ??
@@ -297,6 +332,9 @@ export function routeBankrRequest(args: {
     confidence,
     inherited,
     inheritedFromTier: inherited ? inheritedTier : null,
+    toolsDetected: hasTools,
+    structuredOutput: isStructured,
+    codeHeavy,
     method: "rules",
     reasoning: [
       `tier=${tier}`,
@@ -308,7 +346,7 @@ export function routeBankrRequest(args: {
     savings,
     agenticScore,
     chain,
-    ranked: ranked.map((r) => ({
+    ranked: reranked.map((r) => ({
       id: r.id,
       estimatedCost: Number.isFinite(r.estimatedCost) ? r.estimatedCost : 999999
     }))

@@ -5,6 +5,7 @@ import { DEFAULT_BANKR_ROUTING_CONFIG } from "./router/config.js";
 import { resolveOpenclawConfigPath, requireOpenclawConfigPath, OpenclawConfigNotFoundError, } from "./config-path.js";
 import { getConversationState, getSessionId, isFollowupPrompt, setConversationState, } from "./context.js";
 import { getHealthSummary, getStats, recordRequest } from "./stats.js";
+import { recordSuccess, recordError } from "./reliability.js";
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const BANKR_UPSTREAM_BASE_URL = "https://llm.bankr.bot/v1";
 const DEBUG_ENABLED = process.env.BANKR_ROUTER_DEBUG === "1";
@@ -120,6 +121,18 @@ function hasVision(messages) {
 }
 function hasTools(body) {
     return Array.isArray(body?.tools) && body.tools.length > 0;
+}
+function isStructuredOutput(body) {
+    const format = body?.response_format ?? body?.response_format?.type;
+    if (typeof format === "string") {
+        return format.toLowerCase() === "json" || format.toLowerCase() === "json_object";
+    }
+    const prompt = extractPromptText(body?.messages ?? []);
+    const system = extractSystemPrompt(body?.messages ?? []);
+    return ((system ?? "").toLowerCase().includes("json") ||
+        (system ?? "").toLowerCase().includes("yaml") ||
+        prompt.toLowerCase().includes("json") ||
+        prompt.toLowerCase().includes("yaml"));
 }
 function normalizeRequestedModel(model, routerProviderId) {
     const raw = String(model || "auto");
@@ -276,6 +289,7 @@ export function startServer(options = {}) {
                     config: routerConfig ?? DEFAULT_BANKR_ROUTING_CONFIG,
                     inheritedTier,
                     inheritedConfidence,
+                    structuredOutput: isStructuredOutput(body),
                 });
                 selectedModel = routeDecision.model;
             }
@@ -358,7 +372,16 @@ export function startServer(options = {}) {
                 status: finalStatus,
                 retried,
                 inherited: Boolean(routeDecision?.inherited),
+                toolsDetected: hasTools(body),
+                structuredOutput: isStructuredOutput(body),
+                codeHeavy: routeDecision?.codeHeavy ?? false,
             });
+            if (finalStatus < 400) {
+                recordSuccess(selectedModel, latencyMs, hasTools(body), isStructuredOutput(body));
+            }
+            else {
+                recordError(selectedModel, finalStatus);
+            }
             if (routeDecision?.tier) {
                 setConversationState(sessionId, {
                     lastTier: routeDecision.tier,

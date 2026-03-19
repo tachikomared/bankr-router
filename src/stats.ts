@@ -1,4 +1,5 @@
 import type { RequestStat, Tier } from "./router/types.js";
+import { getAllReliability } from "./reliability.js";
 
 const stats = {
   startedAt: Date.now(),
@@ -9,7 +10,18 @@ const stats = {
   errorsByModel: new Map<string, number>(),
   latencyByModel: new Map<string, { count: number; totalMs: number }>(),
   inheritedFollowups: 0,
+  toolRequests: 0,
+  structuredRequests: 0,
+  codeHeavyRequests: 0,
   lastRequestAt: 0,
+  decisionsBuffer: [] as Array<{
+    ts: number;
+    selectedModel: string;
+    tier: Tier | null;
+    toolsDetected?: boolean;
+    structuredOutput?: boolean;
+    codeHeavy?: boolean;
+  }>,
 };
 
 function incMap<K>(map: Map<K, number>, key: K, amount = 1) {
@@ -29,6 +41,22 @@ export function recordRequest(stat: RequestStat): void {
 
   if (stat.inherited) {
     stats.inheritedFollowups += 1;
+  }
+
+  if (stat.toolsDetected) stats.toolRequests += 1;
+  if (stat.structuredOutput) stats.structuredRequests += 1;
+  if (stat.codeHeavy) stats.codeHeavyRequests += 1;
+
+  stats.decisionsBuffer.push({
+    ts: stat.ts,
+    selectedModel: stat.selectedModel,
+    tier: stat.tier,
+    toolsDetected: stat.toolsDetected,
+    structuredOutput: stat.structuredOutput,
+    codeHeavy: stat.codeHeavy,
+  });
+  if (stats.decisionsBuffer.length > 50) {
+    stats.decisionsBuffer.shift();
   }
 
   const latency = stats.latencyByModel.get(stat.selectedModel) ?? { count: 0, totalMs: 0 };
@@ -56,16 +84,36 @@ export function getStats() {
     ])
   );
 
+  const reliability = getAllReliability();
+  const successByModel = Object.fromEntries(
+    Object.entries(reliability).map(([modelId, modelStats]) => [
+      modelId,
+      {
+        successRate: modelStats.totalRequests > 0 ? modelStats.successCount / modelStats.totalRequests : 0,
+        toolSuccessRate: modelStats.totalRequests > 0 ? modelStats.toolSuccessCount / modelStats.totalRequests : 0,
+        structuredSuccessRate: modelStats.totalRequests > 0 ? modelStats.structuredSuccessCount / modelStats.totalRequests : 0,
+        totalRequests: modelStats.totalRequests,
+        avgLatencyMs: modelStats.avgLatencyMs,
+      },
+    ])
+  );
+
   return {
     startedAt: stats.startedAt,
     totalRequests: stats.totalRequests,
     totalRetries: stats.totalRetries,
     lastRequestAt: stats.lastRequestAt,
     inheritedFollowups: stats.inheritedFollowups,
+    toolRequests: stats.toolRequests,
+    structuredRequests: stats.structuredRequests,
+    codeHeavyRequests: stats.codeHeavyRequests,
+    lastDecisions: stats.decisionsBuffer,
     requestsByModel,
     requestsByTier,
     errorsByModel,
     latencyByModel,
+    successByModel,
+    reliability,
   };
 }
 
