@@ -13,7 +13,7 @@ The agent will read the skill first, then follow the instructions in it.
 
 **Smart AI Model Router for OpenClaw + Bankr Gateway**
 
-> **For normies:** Bankr Router is like having a smart assistant for your AI chats. You just talk to one "bankr-router" model, and it automatically picks the *best* AI model for your specific request—faster, cheaper, and smarter—while keeping everything on Bankr.
+Bankr Router sits in front of Bankr and picks the right model for each request. Simple chats go to cheaper models, code goes to stronger coder models, and heavy reasoning gets the bigger brains. You still use one model name — the router handles the mess behind the curtain.
 
 ## 🚀 **What It Does (Plain English)**
 
@@ -24,6 +24,13 @@ You have access to 20+ different AI models through Bankr. But:
 - Which one should **retry** if one fails?
 
 Instead of you guessing, **Bankr Router automatically picks the right model** based on what you're asking for.
+
+## 💸 **How It Saves Money**
+
+- Cheap prompts stay on cheaper models
+- Code-heavy work gets coder models only when it helps
+- Tool and structured requests avoid wasting expensive models when a mid-tier one will do
+- Fallbacks keep requests moving without jumping straight to the priciest option
 
 ---
 
