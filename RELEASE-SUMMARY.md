@@ -22,6 +22,17 @@
 
 ---
 
+## v0.6.0 - Security & Hardening
+**Most useful features:**
+- 🔒 **Auth token support** – Optional authentication for router endpoints
+- ⏱️ **Rate limiting** – Per-minute request limits configurable per IP
+- ⚡ **Upstream timeouts** – Configurable timeouts for upstream requests
+- 📊 **Enhanced stats & health** – Detailed `/v1/stats` and enriched `/health` endpoints
+
+**Key use case:** Production deployments requiring security, rate limiting, and better observability.
+
+---
+
 ## v0.5.5 - Portability & docs
 - ✅ Portable config paths (no machine-specific fallbacks)
 - ✅ Improved troubleshooting and diagnostics guidance
@@ -42,6 +53,7 @@
 |---------|---------------|--------------|
 | **v0.7.1** | Stats keyed wrong, session instability, detection inconsistency | Planned/final model headers, deterministic session IDs, shared detection |
 | **v0.7.0** | No tool/code awareness, no reliability scoring | Tool/code detection, reliability scoring, auto-retry, fallback chain |
+| **v0.6.0** | No security features, limited observability | Auth tokens, rate limiting, timeouts, enhanced stats/health |
 | **v0.5.5** | Machine-specific config fallback breaking portability | Portable paths, better troubleshooting docs |
 | **v0.5.0** | Hardcoded config path requiring manual editing | Config auto-discovery, current schema support |
 

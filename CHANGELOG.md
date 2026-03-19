@@ -39,6 +39,27 @@
 - Retry loop with configurable fallback chain
 - Structured output detection (JSON schema support)
 
+## v0.6.0
+
+**Security & Hardening Release**
+
+**Highlights:**
+- 🔒 **Auth token support** – Optional authentication for router endpoints
+- ⏱️ **Rate limiting** – Per-minute request limits configurable per IP
+- ⚡ **Upstream timeouts** – Configurable timeouts for upstream requests
+- 📊 **Enhanced stats & health** – Detailed `/v1/stats` and enriched `/health` endpoints
+
+**Added features:**
+- Follow-up inheritance for short prompts within same session
+- Safe multilingual keyword matching (non-Latin scripts support)
+- Request statistics with reliability tracking
+- Session-aware routing with conversation state
+
+**Most useful:**
+- Production-ready with authentication and rate limiting
+- Better observability with comprehensive stats
+- Session continuity for follow-up prompts
+
 ## v0.5.5
 
 - Remove machine-specific config fallback
