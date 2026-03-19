@@ -370,8 +370,8 @@ export function startServer(options = {}) {
                     }
                 }
                 catch (err) {
-                    lastStatus = null;
-                    attemptStatuses.push(null);
+                    lastStatus = 0;
+                    attemptStatuses.push(0);
                     responseText = "";
                 }
                 finally {

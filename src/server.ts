@@ -484,8 +484,8 @@ export function startServer(options: StartServerOptions = {}) {
             }
           }
         } catch (err) {
-          lastStatus = null;
-          attemptStatuses.push(null);
+          lastStatus = 0;
+          attemptStatuses.push(0);
           responseText = "";
         } finally {
           clearTimeout(timeout);

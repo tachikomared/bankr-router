@@ -20,9 +20,10 @@ function getOrCreate(modelId: string): ModelReliability {
 
 export function recordSuccess(modelId: string, latencyMs: number, tools?: boolean, structured?: boolean): void {
   const stats = getOrCreate(modelId);
+  const previousTotal = stats.totalRequests;
   stats.successCount += 1;
   stats.totalRequests += 1;
-  stats.avgLatencyMs = (stats.avgLatencyMs * stats.totalRequests + latencyMs) / stats.totalRequests;
+  stats.avgLatencyMs = (stats.avgLatencyMs * previousTotal + latencyMs) / stats.totalRequests;
   if (tools) stats.toolSuccessCount += 1;
   if (structured) stats.structuredSuccessCount += 1;
   stats.lastUpdatedAt = Date.now();
@@ -33,7 +34,7 @@ export function recordError(modelId: string, status: number): void {
   const stats = getOrCreate(modelId);
   stats.errorCount += 1;
   stats.totalRequests += 1;
-  if (status === 408 || status === 504) stats.timeoutCount += 1;
+  if (status === 408 || status === 504 || status === 0) stats.timeoutCount += 1;
   if (status === 429) stats.rateLimitCount += 1;
   stats.lastUpdatedAt = Date.now();
   reliabilityStore.set(modelId, stats);

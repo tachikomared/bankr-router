@@ -17,9 +17,10 @@ function getOrCreate(modelId) {
 }
 export function recordSuccess(modelId, latencyMs, tools, structured) {
     const stats = getOrCreate(modelId);
+    const previousTotal = stats.totalRequests;
     stats.successCount += 1;
     stats.totalRequests += 1;
-    stats.avgLatencyMs = (stats.avgLatencyMs * stats.totalRequests + latencyMs) / stats.totalRequests;
+    stats.avgLatencyMs = (stats.avgLatencyMs * previousTotal + latencyMs) / stats.totalRequests;
     if (tools)
         stats.toolSuccessCount += 1;
     if (structured)
@@ -31,7 +32,7 @@ export function recordError(modelId, status) {
     const stats = getOrCreate(modelId);
     stats.errorCount += 1;
     stats.totalRequests += 1;
-    if (status === 408 || status === 504)
+    if (status === 408 || status === 504 || status === 0)
         stats.timeoutCount += 1;
     if (status === 429)
         stats.rateLimitCount += 1;

@@ -10,9 +10,13 @@ Local smart router for Bankr LLM Gateway requests inside OpenClaw. It selects a 
 
 **Key features**
 - Profile-based routing: `auto`, `eco`, `premium`.
-- `/v1/route` for safe, no-inference routing decisions.
+- `/v1/route` for **dry-run planning only** (no upstream inference).
+- `/v1/chat/completions` for **real execution** (inference happens upstream).
 - `/v1/diagnostics` for config discovery + catalog errors.
 - Zero external dependencies beyond OpenClaw + Bankr.
+
+**Session consistency**
+- For deterministic follow-up inheritance, pass a stable `x-session-id` header on each request.
 
 Developed by TachikomaRed together with its creator, smolemaru.
 
