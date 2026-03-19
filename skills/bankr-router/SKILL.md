@@ -1,41 +1,75 @@
 ---
 name: bankr-router
-description: Install the Bankr Router OpenClaw plugin for intelligent local routing to Bankr LLM Gateway. Achieve up to 90% cost savings with 15-dimensional scoring across multilingual prompts. Auto-selects optimal models (eco/premium/auto) while keeping inference on Bankr.
+description: Local smart routing layer for Bankr LLM Gateway traffic. Use when explaining or installing Bankr Router, switching auto/eco/premium profiles, configuring OpenClaw providers, verifying routing, or debugging router/Bankr model issues.
 ---
 
 # Bankr Router (OpenClaw plugin skill)
 
-**Local smart router for Bankr LLM Gateway — maximum savings, zero leakage.**
+## Summary
+Bankr Router is a **local smart router** that sits in front of the **Bankr LLM Gateway**. It does **not** replace Bankr. It chooses **which model/profile to use** before requests go to Bankr, then forwards the request upstream.
 
-## Why Install This
+**Benefits:**
+- Lower cost by default (route simpler prompts to cheaper models).
+- Better fallback behavior and retries.
+- Local control over routing policy.
+- Clear visibility into planned vs final vs upstream model selection.
+- Easy profile switching: **auto / eco / premium**.
 
-- **Up to 90% cost reduction** via intelligent local routing
-- **15-dimensional scoring** — prompt complexity, tools, vision, tokens, language, domain
-- **Multilingual optimization** — routes based on language-specific model performance
-- **Zero provider leakage** — all inference stays on Bankr
-- **3 routing profiles** — `eco` (cheap), `premium` (quality), `auto` (balanced)
-- **Local diagnostics** — `/v1/diagnostics` and `/v1/route` for troubleshooting without inference
+---
 
-## Quick Install (Agent Instructions)
+## When to use
+- You want cheaper default routing without changing app code.
+- You want a local routing layer in front of Bankr.
+- You need retries/fallbacks + observability.
+- You want predictable behavior for **auto / eco / premium** modes.
+- You prefer local plugin control over hosted routing.
 
-When a user says "install bankr-router" or shares this repo link, follow these steps:
+---
 
-### Step 1: Clone & Build
+## What this skill can help with
+Use this skill to:
+- Explain what Bankr Router is and why it matters.
+- Explain tradeoffs between auto / eco / premium.
+- Install the plugin locally.
+- Configure OpenClaw provider entries.
+- Verify the router is active.
+- Switch routing modes.
+- Troubleshoot common errors.
+- Identify when agent overrides bypass the router.
+- Explain stats/health endpoints.
+- Explain **dry-run vs real execution** (`/v1/route` vs `/v1/chat/completions`).
+
+---
+
+## Prerequisites
+- Node.js (20+ recommended)
+- OpenClaw installed and running
+- Bankr provider configured via:
+  ```bash
+  bankr llm setup openclaw --install
+  ```
+- Local repo path may differ from examples
+- OpenClaw config path may differ (common: `~/.openclaw/openclaw.json`)
+
+---
+
+## Install (step-by-step)
+
+### 1) Build the plugin
 ```bash
-git clone https://github.com/tachikomared/bankr-router.git ~/bankr-router
-cd ~/bankr-router
+cd /path/to/openclawbankrrouter
 npm install
 npm run build
 ```
 
-### Step 2: Add to OpenClaw Config
-Edit your `openclaw.json` (usually at `~/.openclaw/openclaw.json`):
+### 2) Add plugin entry to OpenClaw config
+Edit your OpenClaw config (commonly `~/.openclaw/openclaw.json`):
 
 ```json
 {
   "plugins": {
     "load": {
-      "paths": ["~/bankr-router"]
+      "paths": ["/path/to/openclawbankrrouter"]
     },
     "entries": {
       "bankr-router": {
@@ -49,7 +83,13 @@ Edit your `openclaw.json` (usually at `~/.openclaw/openclaw.json`):
         }
       }
     }
-  },
+  }
+}
+```
+
+### 3) Add the router provider to models.providers
+```json
+{
   "models": {
     "providers": {
       "bankr-router": {
@@ -57,7 +97,13 @@ Edit your `openclaw.json` (usually at `~/.openclaw/openclaw.json`):
         "apiKey": "local-router"
       }
     }
-  },
+  }
+}
+```
+
+### 4) Set default agent model to the router
+```json
+{
   "agents": {
     "defaults": {
       "model": {
@@ -69,143 +115,172 @@ Edit your `openclaw.json` (usually at `~/.openclaw/openclaw.json`):
 }
 ```
 
-### Step 3: Restart & Verify
+### 5) Restart the gateway
 ```bash
-# Restart your OpenClaw gateway
+openclaw gateway restart
+```
+
+---
+
+## Verify
+Run these exact checks:
+
+### Health check
+```bash
 curl http://127.0.0.1:8787/health
+```
+
+### Ensure models exist
+```bash
 openclaw models list | grep bankr-router
 ```
 
-## Prerequisites
-
-- Node.js 20+
-- OpenClaw >= 0.4.0
-- Bankr provider installed (`bankr llm setup openclaw --install`)
-- Bankr API key in config or `BANKR_LLM_KEY` env var
-
-## Load the plugin (current OpenClaw schema)
-
-### Option A: load via `plugins.load.paths`
-
-```json
-{
-  "plugins": {
-    "load": {
-      "paths": [
-        "/path/to/openclawbankrrouter"
-      ]
-    },
-    "entries": {
-      "bankr-router": {
-        "enabled": true,
-        "config": {
-          "host": "127.0.0.1",
-          "port": 8787,
-          "openclawConfigPath": null,
-          "bankrProviderId": "bankr",
-          "routerProviderId": "bankr-router"
-        }
-      }
-    }
-  }
-}
-```
-
-### Option B: install via CLI
-
+### Dry-run routing (no real upstream call)
 ```bash
-openclaw plugins install /path/to/openclawbankrrouter
-# or link for dev
-openclaw plugins install -l /path/to/openclawbankrrouter
-```
-
-Then ensure `plugins.entries.bankr-router.enabled=true`.
-
-## Provider config (baseUrl)
-
-```json
-{
-  "models": {
-    "providers": {
-      "bankr-router": {
-        "baseUrl": "http://127.0.0.1:8787/v1",
-        "apiKey": "local-router"
-      }
-    }
-  }
-}
-```
-
-## Agent defaults (primary + fallbacks)
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "bankr-router/auto",
-        "fallbacks": ["bankr-router/eco"]
-      }
-    }
-  }
-}
-```
-
-## Config path auto-discovery
-
-If `openclawConfigPath` is null, the router checks:
-1. `OPENCLAW_CONFIG_PATH`
-2. `OPENCLAW_HOME/openclaw.json`
-3. sibling of `OPENCLAW_STATE_DIR`
-4. `~/.openclaw/openclaw.json`
-5. `./.openclaw/openclaw.json` up the parent chain
-
-Set an explicit path if you want to override:
-```json
-{ "plugins": { "entries": { "bankr-router": { "config": { "openclawConfigPath": "/path/to/openclaw.json" }}}}}
-```
-
-## Verify
-
-```bash
-curl http://127.0.0.1:8787/health
-curl http://127.0.0.1:8787/v1/diagnostics
 curl http://127.0.0.1:8787/v1/route \
   -H "content-type: application/json" \
   -d '{"model":"bankr-router/auto","messages":[{"role":"user","content":"say ok"}]}'
-openclaw plugins list
-openclaw plugins info bankr-router
-openclaw models list | grep bankr-router
-openclaw models status
 ```
 
-### Smoke test (tiny)
-
+### Real execution (upstream call)
 ```bash
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H "content-type: application/json" \
   -d '{"model":"bankr-router/auto","messages":[{"role":"user","content":"say ok"}]}'
 ```
 
-### Test from a fresh session
+---
 
-When validating routing behavior, start a fresh OpenClaw session (new chat/thread) to avoid cached model overrides or agent state.
+## Mode switching
+**auto** = balanced smart routing (default)
+**eco** = cheapest practical routing
+**premium** = highest quality routing
+
+### Switch default model (OpenClaw config)
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "bankr-router/eco",
+        "fallbacks": ["bankr-router/auto"]
+      }
+    }
+  }
+}
+```
+Restart gateway after changing defaults:
+```bash
+openclaw gateway restart
+```
+
+---
+
+## How to explain this to a user (agent-ready)
+Use these short explanations:
+
+**What is Bankr Router?**
+> It’s a local routing layer in front of Bankr that picks the right model before the request goes upstream.
+
+**Why do I need it?**
+> It lowers cost, improves fallback behavior, and gives you local control over model selection.
+
+**When should I use eco?**
+> Use eco when cost is the top priority and you’re fine with “good enough” quality.
+
+**Does this replace Bankr?**
+> No. Bankr Router only routes requests; Bankr still runs the models.
+
+**Does this make inference free?**
+> No. It only reduces cost by routing simpler prompts to cheaper models.
+
+**What does the skill do for me?**
+> It installs, configures, verifies, and explains the router + its modes and debugging steps.
+
+---
 
 ## Troubleshooting
 
-- **ENOENT / could not locate OpenClaw config**
-  - Set `plugins.entries.bankr-router.config.openclawConfigPath` or `OPENCLAW_CONFIG_PATH`.
-- **Plugin not discovered**
-  - Ensure repo path is in `plugins.load.paths` or reinstall via `openclaw plugins install`.
-- **Unknown model**
-  - Ensure `models.providers.bankr-router` exists and any allowlist in `agents.defaults.models` includes the router models.
-- **baseURL vs baseUrl**
-  - Use `baseUrl` (lowercase l). `baseURL` is obsolete.
-- **Stale dist**
-  - Run `npm run build` after changes and restart the gateway (if you control it).
+### Unknown model `bankr-router/auto`
+- Ensure `models.providers.bankr-router` exists.
+- Ensure agent allowlists (if any) include `bankr-router/*`.
+- Restart the gateway after config change.
 
-### Router vs upstream failures
+### Plugin not loaded
+- Verify the repo path is in `plugins.load.paths`.
+- Ensure `plugins.entries.bankr-router.enabled = true`.
+- Rebuild: `npm run build`.
 
-- Router errors return `router_error` with config discovery or catalog details.
-- Upstream Bankr errors usually return `401/403` or `5xx` from `https://llm.bankr.bot`.
-- If `/health` is green but completions fail, recheck Bankr API key and provider catalog.
+### Port already in use
+- Router default port is **8787**. Change `plugins.entries.bankr-router.config.port` or stop the conflicting process.
+
+### Gateway restart loop
+- Check config JSON is valid.
+- Check `openclawConfigPath` if auto-discovery fails.
+
+### Requests bypass router
+- An agent or tool may be **overriding its model**.
+- Check `agents.defaults.model` and per-agent `model` overrides.
+
+### Planned vs final model confusion
+- **plannedModel** = initial route decision
+- **finalModel** = model that actually succeeded
+- **upstreamModel** = model returned by Bankr
+
+### Streaming issues
+- Test non-stream first (`/v1/chat/completions` without `stream=true`).
+- Ensure router and gateway are on the same machine or low-latency network.
+
+### Wrong OpenClaw config path
+Set explicit path:
+```json
+{
+  "plugins": {
+    "entries": {
+      "bankr-router": {
+        "config": {
+          "openclawConfigPath": "/absolute/path/to/openclaw.json"
+        }
+      }
+    }
+  }
+}
+```
+
+### Bankr provider missing
+- Run: `bankr llm setup openclaw --install`
+- Ensure `models.providers.bankr` exists and has an API key.
+
+### Model exists in `/v1/route` but not in `/v1/chat/completions`
+- `/v1/route` is dry-run only. Real execution requires valid Bankr credentials.
+
+---
+
+## Useful commands (ops)
+```bash
+# build
+npm run build
+
+# restart gateway
+openclaw gateway restart
+
+# router health
+curl http://127.0.0.1:8787/health
+
+# router stats/diagnostics (if enabled)
+curl http://127.0.0.1:8787/v1/diagnostics
+
+# list models
+openclaw models list | grep bankr-router
+
+# tail gateway logs
+journalctl --user -u openclaw-gateway.service -n 50 --no-pager
+```
+
+---
+
+## Notes for contributors
+- Keep the skill at: `skills/bankr-router/SKILL.md`.
+- Optional references live under `skills/bankr-router/references/`.
+- Optional scripts live under `skills/bankr-router/scripts/`.
+- Do **not** add extra top-level docs; keep SKILL.md self-sufficient.
