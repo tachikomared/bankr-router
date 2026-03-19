@@ -36,11 +36,16 @@ export function recordRequest(stat) {
         stats.codeHeavyRequests += 1;
     stats.decisionsBuffer.push({
         ts: stat.ts,
-        selectedModel: stat.selectedModel,
+        plannedModel: stat.plannedModel,
+        finalModel: stat.finalModel ?? stat.selectedModel,
+        upstreamModel: stat.upstreamModel,
         tier: stat.tier,
         toolsDetected: stat.toolsDetected,
         structuredOutput: stat.structuredOutput,
         codeHeavy: stat.codeHeavy,
+        retryCount: stat.retried,
+        success: stat.success,
+        statusCode: stat.statusCode ?? stat.status,
     });
     if (stats.decisionsBuffer.length > 50) {
         stats.decisionsBuffer.shift();

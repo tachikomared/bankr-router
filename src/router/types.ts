@@ -106,6 +106,7 @@ export type ScoringResult = {
 export type RankedCandidate = {
   id: string;
   estimatedCost: number;
+  rankingScore?: number;
 };
 
 export type RoutingDecision = {
@@ -138,6 +139,9 @@ export type ConversationState = {
 export type RequestStat = {
   ts: number;
   selectedModel: string;
+  plannedModel?: string;
+  finalModel?: string;
+  upstreamModel?: string;
   tier: Tier | null;
   confidence: number;
   latencyMs: number;
@@ -147,6 +151,8 @@ export type RequestStat = {
   toolsDetected?: boolean;
   structuredOutput?: boolean;
   codeHeavy?: boolean;
+  success?: boolean;
+  statusCode?: number;
 };
 
 export type ModelReliability = {

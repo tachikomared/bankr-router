@@ -16,11 +16,16 @@ const stats = {
   lastRequestAt: 0,
   decisionsBuffer: [] as Array<{
     ts: number;
-    selectedModel: string;
+    plannedModel?: string;
+    finalModel?: string;
+    upstreamModel?: string;
     tier: Tier | null;
     toolsDetected?: boolean;
     structuredOutput?: boolean;
     codeHeavy?: boolean;
+    retryCount?: number;
+    success?: boolean;
+    statusCode?: number;
   }>,
 };
 
@@ -49,11 +54,16 @@ export function recordRequest(stat: RequestStat): void {
 
   stats.decisionsBuffer.push({
     ts: stat.ts,
-    selectedModel: stat.selectedModel,
+    plannedModel: stat.plannedModel,
+    finalModel: stat.finalModel ?? stat.selectedModel,
+    upstreamModel: stat.upstreamModel,
     tier: stat.tier,
     toolsDetected: stat.toolsDetected,
     structuredOutput: stat.structuredOutput,
     codeHeavy: stat.codeHeavy,
+    retryCount: stat.retried,
+    success: stat.success,
+    statusCode: stat.statusCode ?? stat.status,
   });
   if (stats.decisionsBuffer.length > 50) {
     stats.decisionsBuffer.shift();

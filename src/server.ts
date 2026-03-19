@@ -165,10 +165,17 @@ function hasTools(body: any): boolean {
 }
 
 function isStructuredOutput(body: any): boolean {
-  const format = body?.response_format ?? body?.response_format?.type;
-  if (typeof format === "string") {
-    return format.toLowerCase() === "json" || format.toLowerCase() === "json_object";
+  const formatType = body?.response_format?.type ?? body?.response_format;
+  if (typeof formatType === "string") {
+    const normalized = formatType.toLowerCase();
+    if (normalized === "json" || normalized === "json_object" || normalized === "json_schema") {
+      return true;
+    }
   }
+
+  const schema = body?.response_format?.schema ?? body?.response_format?.json_schema;
+  if (schema) return true;
+
   const prompt = extractPromptText(body?.messages ?? []);
   const system = extractSystemPrompt(body?.messages ?? []);
   return (
@@ -361,6 +368,9 @@ export function startServer(options: StartServerOptions = {}) {
       let plannedModel: string | null = null;
       let routeDecision: any = null;
 
+      const toolsDetected = hasTools(body);
+      const structuredOutput = isStructuredOutput(body);
+
       if (selectedModel && !catalog.find((m) => m.id === selectedModel)) {
         throw new Error(`Requested model not found in BANKR catalog: ${selectedModel}`);
       }
@@ -372,12 +382,12 @@ export function startServer(options: StartServerOptions = {}) {
           maxOutputTokens: body?.max_tokens ?? body?.max_completion_tokens ?? 1024,
           profile: requested.profile ?? "auto",
           hasVision: hasVision(messages),
-          hasTools: hasTools(body),
+          hasTools: toolsDetected,
           catalog,
           config: routerConfig ?? DEFAULT_BANKR_ROUTING_CONFIG,
           inheritedTier,
           inheritedConfidence,
-          structuredOutput: isStructuredOutput(body),
+          structuredOutput,
         });
 
         selectedModel = routeDecision.model;
@@ -435,6 +445,7 @@ export function startServer(options: StartServerOptions = {}) {
       let finalModel: string | null = null;
       let upstreamModel: string | null = null;
       const attemptedModels: string[] = [];
+      const attemptStatuses: Array<number | null> = [];
 
       const startAt = Date.now();
 
@@ -459,6 +470,7 @@ export function startServer(options: StartServerOptions = {}) {
 
           responseText = await lastResponse.text();
           lastStatus = lastResponse.status;
+          attemptStatuses.push(lastStatus);
 
           if (lastStatus && lastStatus < 400) {
             finalModel = modelToTry;
@@ -473,6 +485,7 @@ export function startServer(options: StartServerOptions = {}) {
           }
         } catch (err) {
           lastStatus = null;
+          attemptStatuses.push(null);
           responseText = "";
         } finally {
           clearTimeout(timeout);
@@ -518,22 +531,31 @@ export function startServer(options: StartServerOptions = {}) {
       recordRequest({
         ts: Date.now(),
         selectedModel: finalResolvedModel ?? plannedModel,
+        plannedModel: plannedModel ?? undefined,
+        finalModel: finalResolvedModel ?? undefined,
+        upstreamModel: upstreamModel ?? undefined,
         tier: routeDecision?.tier ?? null,
         confidence: routeDecision?.confidence ?? 0,
         latencyMs,
         status: finalStatus,
         retried,
         inherited: Boolean(routeDecision?.inherited),
-        toolsDetected: hasTools(body),
-        structuredOutput: isStructuredOutput(body),
+        toolsDetected,
+        structuredOutput,
         codeHeavy: routeDecision?.codeHeavy ?? false,
+        success: finalStatus < 400,
+        statusCode: finalStatus,
       });
 
-      if (finalStatus < 400) {
-        recordSuccess(finalResolvedModel ?? plannedModel, latencyMs, hasTools(body), isStructuredOutput(body));
-      } else {
-        recordError(finalResolvedModel ?? plannedModel, finalStatus);
-      }
+      // Reliability: record each attempted model once
+      attemptedModels.forEach((modelId, index) => {
+        const status = attemptStatuses[index] ?? finalStatus;
+        if (status != null && status < 400) {
+          recordSuccess(modelId, latencyMs, toolsDetected, structuredOutput);
+        } else {
+          recordError(modelId, status ?? 502);
+        }
+      });
 
       if (routeDecision?.tier) {
         setConversationState(sessionId, {

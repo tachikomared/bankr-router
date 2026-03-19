@@ -165,14 +165,16 @@ function pickCheapestInChain(chain, catalog, estimatedInputTokens, maxOutputToke
         if (!model)
             return null;
         const rawCost = estimateModelCost(model, estimatedInputTokens, maxOutputTokens);
-        const adjustedCost = rawCost + codeAffinityBonus(id, codeHeavy);
+        const estimatedCost = Number.isFinite(rawCost) ? Math.max(0, rawCost) : Number.POSITIVE_INFINITY;
+        const rankingScore = rawCost + codeAffinityBonus(id, codeHeavy);
         return {
             id,
-            estimatedCost: adjustedCost
+            estimatedCost,
+            rankingScore
         };
     })
-        .filter((x) => !!x && Number.isFinite(x.estimatedCost));
-    ranked.sort((a, b) => a.estimatedCost - b.estimatedCost);
+        .filter((x) => !!x && Number.isFinite(x.rankingScore ?? Number.POSITIVE_INFINITY));
+    ranked.sort((a, b) => (a.rankingScore ?? a.estimatedCost) - (b.rankingScore ?? b.estimatedCost));
     return ranked;
 }
 export function routeBankrRequest(args) {
@@ -257,7 +259,8 @@ export function routeBankrRequest(args) {
         chain,
         ranked: reranked.map((r) => ({
             id: r.id,
-            estimatedCost: Number.isFinite(r.estimatedCost) ? r.estimatedCost : 999999
+            estimatedCost: Number.isFinite(r.estimatedCost) ? r.estimatedCost : 999999,
+            rankingScore: Number.isFinite(r.rankingScore) ? r.rankingScore : undefined
         }))
     };
 }
