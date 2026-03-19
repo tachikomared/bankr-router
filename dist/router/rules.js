@@ -11,7 +11,48 @@
 function normalizeText(text) {
     return text.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 }
+function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function isLatinLike(keyword) {
+    const raw = keyword.trim();
+    if (!raw)
+        return false;
+    const latinLike = raw.match(/[a-z0-9]/gi)?.length ?? 0;
+    const nonLatin = raw.match(/[\u4e00-\u9fff\u3040-\u30ff\u0400-\u04ff\u0600-\u06ff]/g)?.length ?? 0;
+    return latinLike >= Math.max(1, nonLatin);
+}
+function containsKeyword(text, keyword) {
+    const needle = keyword.toLowerCase();
+    if (!needle)
+        return false;
+    if (!isLatinLike(needle)) {
+        return text.includes(needle);
+    }
+    const escaped = escapeRegExp(needle);
+    const hasSpaces = /\s+/.test(needle);
+    const pattern = hasSpaces
+        ? `(?:^|[^\\p{L}\\p{N}])${escaped}(?:$|[^\\p{L}\\p{N}])`
+        : `(?:^|[^\\p{L}\\p{N}_])${escaped}(?:$|[^\\p{L}\\p{N}_])`;
+    const re = new RegExp(pattern, "iu");
+    return re.test(text);
+}
+function countKeywordHits(text, keywords) {
+    const matches = [];
+    let count = 0;
+    for (const kw of keywords) {
+        if (containsKeyword(text, kw)) {
+            count++;
+            if (!matches.includes(kw) && matches.length < 3)
+                matches.push(kw);
+        }
+    }
+    return { count, matches };
+}
 function countContains(text, keywords) {
+    return countKeywordHits(text, keywords).count;
+}
+function countContainsRaw(text, keywords) {
     let count = 0;
     for (const kw of keywords) {
         const needle = kw.toLowerCase();
@@ -31,33 +72,26 @@ function scoreTokenCount(estimatedTokens, thresholds) {
     return { name: "tokenCount", score: 0, signal: null };
 }
 function scoreKeywordMatch(text, keywords, name, signalLabel, thresholds, scores) {
-    const matches = [];
-    for (const kw of keywords) {
-        if (text.includes(kw.toLowerCase())) {
-            matches.push(kw);
-            if (matches.length >= thresholds.high)
-                break;
-        }
-    }
-    if (matches.length >= thresholds.high) {
+    const { count, matches } = countKeywordHits(text, keywords);
+    if (count >= thresholds.high) {
         return {
             name,
             score: scores.high,
-            signal: `${signalLabel} (${matches.slice(0, 3).join(", ")})`
+            signal: `${signalLabel} (${matches.join(", ")})`
         };
     }
-    if (matches.length >= thresholds.low) {
+    if (count >= thresholds.low) {
         return {
             name,
             score: scores.low,
-            signal: `${signalLabel} (${matches.slice(0, 3).join(", ")})`
+            signal: `${signalLabel} (${matches.join(", ")})`
         };
     }
     return { name, score: scores.none, signal: null };
 }
 function scoreCodePresence(rawPrompt, userText, keywords) {
     const codeFenceCount = (rawPrompt.match(/```/g) || []).length;
-    const keywordMatches = countContains(userText, keywords);
+    const keywordMatches = countContainsRaw(userText, keywords);
     if (codeFenceCount >= 2) {
         return { name: "codePresence", score: 1.0, signal: "code fence" };
     }
@@ -177,7 +211,7 @@ function scoreAgenticTask(text, keywords) {
     let matchCount = 0;
     const signals = [];
     for (const keyword of keywords) {
-        if (text.includes(keyword.toLowerCase())) {
+        if (containsKeyword(text, keyword)) {
             matchCount++;
             if (signals.length < 3)
                 signals.push(keyword);
@@ -254,8 +288,8 @@ export function classifyByRules(prompt, systemPrompt, estimatedTokens, config) {
         weightedScore += d.score * w;
     }
     // Reasoning override should still be user-intent driven, so only user prompt.
-    const reasoningMatches = config.reasoningKeywords.filter((kw) => userText.includes(kw.toLowerCase()));
-    if (reasoningMatches.length >= 2) {
+    const reasoningMatches = countKeywordHits(userText, config.reasoningKeywords).count;
+    if (reasoningMatches >= 2) {
         const confidence = calibrateConfidence(Math.max(weightedScore, 0.35), config.confidenceSteepness);
         return {
             score: weightedScore,

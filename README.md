@@ -45,7 +45,8 @@ x-router-attempted-models: deepseek-v3.2,gpt-5-nano    (retry chain)
 
 | Version | What it added | Hot Feature |
 |---------|---------------|-------------|
-| **v0.7.1** (Latest) | Correctness & reliability | Planned vs final model tracking, deterministic sessions |
+| **v0.8.2** (Latest) | Model refresh + better reranking | New model anchors, cleaner code/tool/structured priorities, updated skill docs |
+| **v0.7.1** | Correctness & reliability | Planned vs final model tracking, deterministic sessions |
 | **v0.7.0** | Tool/code-aware routing | Auto-detects tools/code, reliability scoring, auto-retry |
 | **v0.6.0** | Security hardening | Auth tokens, rate limiting, enhanced stats |
 | **v0.5.x** | Basic routing | Auto model selection, diagnostics |
@@ -84,13 +85,6 @@ You just:
 *Developed by TachikomaRed together with its creator, smolemaru.*
 
 ## 🔧 **Quick Install (2 minutes)**
-
-```bash
-git clone https://github.com/tachikomared/bankr-router.git
-cd bankr-router
-npm install
-npm run build
-```
 
 ```bash
 git clone https://github.com/tachikomared/bankr-router.git
@@ -147,6 +141,7 @@ npm run build
 ## Requirements
 
 - Node.js 20+
+
 ---
 
 ## ⚙️ **Requirements**
@@ -219,72 +214,3 @@ Add these two sections to your OpenClaw config:
   }
 }
 ```
-
-**That's it!** Now all AI requests go through Bankr Router, which picks the best Bankr model automatically.
-
----
-
-## ✅ **Quick Test (Verify It Works)**
-
-```bash
-# Check router is running
-curl http://127.0.0.1:8787/health
-
-# Dry-run: See what model router would pick
-curl http://127.0.0.1:8787/v1/route \
-  -H "content-type: application/json" \
-  -d '{"model":"bankr-router/auto","messages":[{"role":"user","content":"Write a hello world program"}]}'
-
-# Real test: Get an actual AI response
-curl http://127.0.0.1:8787/v1/chat/completions \
-  -H "content-type: application/json" \
-  -d '{"model":"bankr-router/auto","messages":[{"role":"user","content":"Say hi"}]}'
-```
-
-Check for success! You should see:
-- `x-router-planned-model` header
-- `x-router-final-model` header  
-- A working AI response
-
-## Skill
-
-This repo includes a reusable OpenClaw skill for installing and configuring the router:
-
-```
-skills/bankr-router/SKILL.md
-```
-
-It documents setup steps, config paths to adjust, and common failure modes.
-
-## Troubleshooting matrix
-
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `ENOENT` / “Could not locate OpenClaw config” | config path not found | Set `plugins.entries.bankr-router.config.openclawConfigPath` or `OPENCLAW_CONFIG_PATH`. |
-| Plugin not discovered | plugin path not in `plugins.load.paths` / install incomplete | Add `plugins.load.paths` or run `openclaw plugins install <path|.tgz|npm-spec>`. |
-| `Unknown model: bankr-router/auto` | provider not registered or allowlist missing | Add `models.providers.bankr-router` and ensure `agents.defaults.models` allowlist includes it (if set). |
-| `baseURL` vs `baseUrl` mismatch | old config key | Use `baseUrl` (lowercase `l`) under `models.providers`. |
-| Large session timeout | OpenClaw timeout exceeded | Reduce prompt size or increase OpenClaw timeout settings. |
-| Router health OK but inference fails | upstream auth or provider catalog mismatch | Check Bankr API key and `bankrProviderId` in the config. |
-| Router bypassed | per-agent model override | Remove per-agent overrides in `agents.list[].model` or agent-level config files (location varies by install). |
-| Stale dist not rebuilt | plugin JS not rebuilt | Run `npm run build`, then restart gateway (if you control it). |
-
-### Diagnostics pointers
-
-- `/v1/diagnostics` shows the selected OpenClaw config path + attempted paths.
-- `/health` shows router reachability only; it does not validate upstream auth or latency.
-- If `/health` is green but completions fail, check upstream Bankr credentials and model catalog.
-
-### Safe troubleshooting (no service restarts required)
-
-If you cannot restart services, you can still verify configuration by:
-
-1. Checking `/v1/diagnostics` output for config discovery.
-2. Confirming your OpenClaw config has `models.providers.bankr-router.baseUrl`.
-3. Using `/v1/route` to see routing decisions without upstream inference.
-
-### Router vs upstream failure signals
-
-- Router failures: `router_error` in the response with details about config discovery or catalog loading.
-- Upstream failures: HTTP errors from `https://llm.bankr.bot` or auth failures (usually `401/403`).
-- If router `/health` is OK but upstream fails, recheck Bankr API key and provider catalog.

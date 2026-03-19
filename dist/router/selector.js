@@ -133,6 +133,76 @@ function codeAffinityBonus(modelId, codeHeavy) {
         return -0.04;
     return 0;
 }
+function rerankByPriority(ranked, priorityList) {
+    const priorityModels = priorityList
+        .map((id) => ranked.find((c) => c.id === id))
+        .filter((x) => !!x);
+    if (!priorityModels.length)
+        return ranked;
+    const remainder = ranked.filter((candidate) => !priorityModels.includes(candidate));
+    priorityModels.sort((a, b) => (a.estimatedCost ?? Infinity) - (b.estimatedCost ?? Infinity));
+    return [...priorityModels, ...remainder];
+}
+function rerankForCodeHeavy(ranked, profile) {
+    const CODE_HEAVY_PRIORITY_AUTO = [
+        "qwen3-coder",
+        "deepseek-v3.2",
+        "gpt-5.4-mini",
+        "claude-sonnet-4.6",
+        "gpt-5.2-codex",
+    ];
+    const CODE_HEAVY_PRIORITY_ECO = [
+        "qwen3-coder",
+        "deepseek-v3.2",
+        "gemini-3.1-flash-lite",
+        "qwen3.5-plus",
+        "gpt-5-mini",
+    ];
+    const CODE_HEAVY_PRIORITY_PREMIUM = [
+        "gpt-5.4",
+        "claude-sonnet-4.6",
+        "gpt-5.2-codex",
+        "claude-opus-4.6",
+        "gemini-3.1-pro",
+    ];
+    const priorityList = profile === "eco"
+        ? CODE_HEAVY_PRIORITY_ECO
+        : profile === "premium"
+            ? CODE_HEAVY_PRIORITY_PREMIUM
+            : CODE_HEAVY_PRIORITY_AUTO;
+    return rerankByPriority(ranked, priorityList);
+}
+function rerankForToolAndStructured(ranked, profile, tools, structured) {
+    if (!tools && !structured)
+        return ranked;
+    const TOOL_STRUCTURED_PRIORITY_AUTO = [
+        "gpt-5.4-mini",
+        "claude-sonnet-4.6",
+        "gemini-3.1-pro",
+        "deepseek-v3.2",
+        "gemini-3.1-flash-lite",
+    ];
+    const TOOL_STRUCTURED_PRIORITY_ECO = [
+        "deepseek-v3.2",
+        "gemini-3.1-flash-lite",
+        "gpt-5-mini",
+        "qwen3.5-plus",
+        "grok-4.1-fast",
+    ];
+    const TOOL_STRUCTURED_PRIORITY_PREMIUM = [
+        "claude-sonnet-4.6",
+        "gpt-5.4",
+        "claude-opus-4.6",
+        "gemini-3.1-pro",
+        "gpt-5.2",
+    ];
+    const priorityList = profile === "eco"
+        ? TOOL_STRUCTURED_PRIORITY_ECO
+        : profile === "premium"
+            ? TOOL_STRUCTURED_PRIORITY_PREMIUM
+            : TOOL_STRUCTURED_PRIORITY_AUTO;
+    return rerankByPriority(ranked, priorityList);
+}
 function pickCheapestInChain(chain, catalog, estimatedInputTokens, maxOutputTokens, prompt, systemPrompt) {
     const codeHeavy = looksCodeHeavy(prompt, systemPrompt);
     const ranked = chain
@@ -141,18 +211,20 @@ function pickCheapestInChain(chain, catalog, estimatedInputTokens, maxOutputToke
         if (!model)
             return null;
         const rawCost = estimateModelCost(model, estimatedInputTokens, maxOutputTokens);
-        const adjustedCost = rawCost + codeAffinityBonus(id, codeHeavy);
+        const estimatedCost = Number.isFinite(rawCost) ? Math.max(0, rawCost) : Number.POSITIVE_INFINITY;
+        const rankingScore = rawCost + codeAffinityBonus(id, codeHeavy);
         return {
             id,
-            estimatedCost: adjustedCost
+            estimatedCost,
+            rankingScore
         };
     })
-        .filter((x) => !!x && Number.isFinite(x.estimatedCost));
-    ranked.sort((a, b) => a.estimatedCost - b.estimatedCost);
+        .filter((x) => !!x && Number.isFinite(x.rankingScore ?? Number.POSITIVE_INFINITY));
+    ranked.sort((a, b) => (a.rankingScore ?? a.estimatedCost) - (b.rankingScore ?? b.estimatedCost));
     return ranked;
 }
 export function routeBankrRequest(args) {
-    const { prompt, systemPrompt, maxOutputTokens, profile = "auto", hasVision = false, hasTools = false, catalog, config = DEFAULT_BANKR_ROUTING_CONFIG } = args;
+    const { prompt, systemPrompt, maxOutputTokens, profile = "auto", hasVision = false, hasTools = false, catalog, config = DEFAULT_BANKR_ROUTING_CONFIG, inheritedTier = null, inheritedConfidence = 0, structuredOutput = false } = args;
     const catalogMap = new Map(catalog.map((m) => [m.id, m]));
     const estimatedInputTokens = estimateInputTokens(systemPrompt, prompt);
     const estimatedTotalTokens = estimatedInputTokens + maxOutputTokens;
@@ -160,6 +232,7 @@ export function routeBankrRequest(args) {
     let confidence = 0.99;
     let agenticScore = 0;
     let signals = [];
+    let inherited = false;
     if (estimatedTotalTokens > config.overrides.maxTokensForceComplex) {
         tier = "COMPLEX";
     }
@@ -169,12 +242,19 @@ export function routeBankrRequest(args) {
         confidence = ruleResult.confidence;
         agenticScore = ruleResult.agenticScore;
         signals = ruleResult.signals;
-        const structured = (systemPrompt ?? "").toLowerCase().includes("json") ||
+        const structuredDetected = structuredOutput ||
+            (systemPrompt ?? "").toLowerCase().includes("json") ||
             (systemPrompt ?? "").toLowerCase().includes("yaml") ||
             prompt.toLowerCase().includes("json") ||
             prompt.toLowerCase().includes("yaml");
-        if (structured) {
+        if (structuredDetected) {
             tier = minTier(tier, config.overrides.structuredOutputMinTier);
+        }
+        const followupConfig = config.followup;
+        if (!structuredDetected && followupConfig?.enabled && inheritedTier && inheritedConfidence >= followupConfig.inheritConfidenceFloor) {
+            tier = inheritedTier;
+            confidence = Math.max(confidence, inheritedConfidence);
+            inherited = true;
         }
     }
     const tierConfigs = chooseTierConfigSet(config, profile, agenticScore);
@@ -184,10 +264,15 @@ export function routeBankrRequest(args) {
     chain = filterByVision(chain, hasVision, catalogMap);
     chain = filterByContext(chain, estimatedTotalTokens, catalogMap);
     const ranked = pickCheapestInChain(chain, catalogMap, estimatedInputTokens, maxOutputTokens, prompt, systemPrompt);
-    if (!ranked.length) {
+    const codeHeavy = looksCodeHeavy(prompt, systemPrompt);
+    let reranked = ranked;
+    reranked = rerankForCodeHeavy(reranked, profile);
+    const isStructured = structuredOutput || (systemPrompt ?? "").toLowerCase().includes("json") || prompt.toLowerCase().includes("json") || prompt.toLowerCase().includes("yaml");
+    reranked = rerankForToolAndStructured(reranked, profile, hasTools, isStructured);
+    if (!reranked.length) {
         throw new Error(`No eligible BANKR models with finite cost in tier ${tier}`);
     }
-    const selected = ranked[0].id;
+    const selected = reranked[0].id;
     const baselineModel = catalogMap.get("claude-opus-4.6") ??
         catalogMap.get("claude-opus-4.5") ??
         catalogMap.get(selected);
@@ -199,8 +284,14 @@ export function routeBankrRequest(args) {
         : 0;
     return {
         model: selected,
+        plannedModel: selected,
         tier,
         confidence,
+        inherited,
+        inheritedFromTier: inherited ? inheritedTier : null,
+        toolsDetected: hasTools,
+        structuredOutput: isStructured,
+        codeHeavy,
         method: "rules",
         reasoning: [
             `tier=${tier}`,
@@ -212,9 +303,10 @@ export function routeBankrRequest(args) {
         savings,
         agenticScore,
         chain,
-        ranked: ranked.map((r) => ({
+        ranked: reranked.map((r) => ({
             id: r.id,
-            estimatedCost: Number.isFinite(r.estimatedCost) ? r.estimatedCost : 999999
+            estimatedCost: Number.isFinite(r.estimatedCost) ? r.estimatedCost : 999999,
+            rankingScore: Number.isFinite(r.rankingScore) ? r.rankingScore : undefined
         }))
     };
 }
