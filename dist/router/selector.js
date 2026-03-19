@@ -152,7 +152,7 @@ function pickCheapestInChain(chain, catalog, estimatedInputTokens, maxOutputToke
     return ranked;
 }
 export function routeBankrRequest(args) {
-    const { prompt, systemPrompt, maxOutputTokens, profile = "auto", hasVision = false, hasTools = false, catalog, config = DEFAULT_BANKR_ROUTING_CONFIG } = args;
+    const { prompt, systemPrompt, maxOutputTokens, profile = "auto", hasVision = false, hasTools = false, catalog, config = DEFAULT_BANKR_ROUTING_CONFIG, inheritedTier = null, inheritedConfidence = 0 } = args;
     const catalogMap = new Map(catalog.map((m) => [m.id, m]));
     const estimatedInputTokens = estimateInputTokens(systemPrompt, prompt);
     const estimatedTotalTokens = estimatedInputTokens + maxOutputTokens;
@@ -160,6 +160,7 @@ export function routeBankrRequest(args) {
     let confidence = 0.99;
     let agenticScore = 0;
     let signals = [];
+    let inherited = false;
     if (estimatedTotalTokens > config.overrides.maxTokensForceComplex) {
         tier = "COMPLEX";
     }
@@ -175,6 +176,12 @@ export function routeBankrRequest(args) {
             prompt.toLowerCase().includes("yaml");
         if (structured) {
             tier = minTier(tier, config.overrides.structuredOutputMinTier);
+        }
+        const followupConfig = config.followup;
+        if (!structured && followupConfig?.enabled && inheritedTier && inheritedConfidence >= followupConfig.inheritConfidenceFloor) {
+            tier = inheritedTier;
+            confidence = Math.max(confidence, inheritedConfidence);
+            inherited = true;
         }
     }
     const tierConfigs = chooseTierConfigSet(config, profile, agenticScore);
@@ -201,6 +208,8 @@ export function routeBankrRequest(args) {
         model: selected,
         tier,
         confidence,
+        inherited,
+        inheritedFromTier: inherited ? inheritedTier : null,
         method: "rules",
         reasoning: [
             `tier=${tier}`,

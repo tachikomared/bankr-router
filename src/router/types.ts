@@ -67,6 +67,25 @@ export type RoutingConfig = {
   ecoTiers?: Record<Tier, TierConfig>;
   premiumTiers?: Record<Tier, TierConfig>;
   agenticTiers?: Record<Tier, TierConfig>;
+
+  followup?: {
+    enabled: boolean;
+    maxAgeMs: number;
+    shortPromptMaxChars: number;
+    inheritConfidenceFloor: number;
+  };
+
+  retries?: {
+    enabled: boolean;
+    maxAttempts: number;
+    retryOnStatuses: number[];
+  };
+
+  server?: {
+    authToken?: string;
+    rateLimitPerMinute?: number;
+    upstreamTimeoutMs?: number;
+  };
 };
 
 export type DimensionScore = {
@@ -93,12 +112,32 @@ export type RoutingDecision = {
   model: string;
   tier: Tier;
   confidence: number;
-  method: "rules";
-  reasoning: string;
-  costEstimate: number;
-  baselineCost: number;
-  savings: number;
-  agenticScore?: number;
   chain: string[];
   ranked: RankedCandidate[];
+  inherited?: boolean;
+  inheritedFromTier?: Tier | null;
+  method?: "rules";
+  reasoning?: string;
+  costEstimate?: number;
+  baselineCost?: number;
+  savings?: number;
+  agenticScore?: number;
+};
+
+export type ConversationState = {
+  lastTier: Tier | null;
+  lastConfidence: number;
+  lastUpdatedAt: number;
+  lastSelectedModel?: string;
+};
+
+export type RequestStat = {
+  ts: number;
+  selectedModel: string;
+  tier: Tier | null;
+  confidence: number;
+  latencyMs: number;
+  status: number;
+  retried: number;
+  inherited: boolean;
 };

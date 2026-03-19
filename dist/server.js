@@ -1,18 +1,42 @@
 import http from "node:http";
 import { buildCatalogLoadError, loadBankrCatalogWithDiscovery, isConfigNotFoundError, } from "./catalog.js";
 import { routeBankrRequest } from "./router/selector.js";
+import { DEFAULT_BANKR_ROUTING_CONFIG } from "./router/config.js";
 import { resolveOpenclawConfigPath, requireOpenclawConfigPath, OpenclawConfigNotFoundError, } from "./config-path.js";
+import { getConversationState, getSessionId, isFollowupPrompt, setConversationState, } from "./context.js";
+import { getHealthSummary, getStats, recordRequest } from "./stats.js";
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const BANKR_UPSTREAM_BASE_URL = "https://llm.bankr.bot/v1";
 const DEBUG_ENABLED = process.env.BANKR_ROUTER_DEBUG === "1";
-function json(res, status, obj) {
-    res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+function json(res, status, obj, headers) {
+    res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...(headers ?? {}) });
     res.end(JSON.stringify(obj, null, 2));
 }
 function debugLog(...args) {
     if (!DEBUG_ENABLED)
         return;
     console.error("[bankr-router]", ...args);
+}
+function getClientIp(req) {
+    const forwarded = req.headers["x-forwarded-for"];
+    if (typeof forwarded === "string" && forwarded.trim()) {
+        return forwarded.split(",")[0].trim();
+    }
+    return req.socket.remoteAddress || "unknown";
+}
+function parseAuth(req) {
+    const auth = req.headers.authorization;
+    if (!auth || typeof auth !== "string")
+        return null;
+    const [scheme, token] = auth.split(" ");
+    if (scheme?.toLowerCase() !== "bearer" || !token)
+        return null;
+    return token.trim();
+}
+function shouldRetry(status, retryOn) {
+    if (status == null)
+        return true;
+    return retryOn.includes(status);
 }
 function buildConfigNotFoundError(attemptedPaths) {
     return {
@@ -160,7 +184,11 @@ export function startServer(options = {}) {
                     ok: true,
                     name: "bankr-router",
                     upstream: BANKR_UPSTREAM_BASE_URL,
+                    ...getHealthSummary(),
                 });
+            }
+            if (req.method === "GET" && url.pathname === "/v1/stats") {
+                return json(res, 200, getStats());
             }
             if (req.method === "GET" && url.pathname === "/v1/models") {
                 return json(res, 200, {
@@ -193,9 +221,44 @@ export function startServer(options = {}) {
                 providerId: bankrProviderId,
             });
             const catalog = loaded.catalog.models;
+            const routerConfig = DEFAULT_BANKR_ROUTING_CONFIG;
             const requested = normalizeRequestedModel(body?.model, routerProviderId);
             const prompt = extractPromptText(messages);
             const systemPrompt = extractSystemPrompt(messages);
+            const sessionId = getSessionId(req, body);
+            const followupConfig = routerConfig.followup;
+            const promptIsFollowup = followupConfig
+                ? isFollowupPrompt(prompt, followupConfig.shortPromptMaxChars)
+                : false;
+            let inheritedTier = null;
+            let inheritedConfidence = 0;
+            if (promptIsFollowup && followupConfig?.enabled) {
+                const previous = getConversationState(sessionId);
+                if (previous && Date.now() - previous.lastUpdatedAt <= followupConfig.maxAgeMs) {
+                    inheritedTier = previous.lastTier;
+                    inheritedConfidence = previous.lastConfidence;
+                }
+            }
+            const serverConfig = routerConfig?.server ?? DEFAULT_BANKR_ROUTING_CONFIG.server;
+            if (serverConfig?.authToken) {
+                const token = parseAuth(req);
+                if (!token || token !== serverConfig.authToken) {
+                    return json(res, 401, { error: "unauthorized" });
+                }
+            }
+            const rateLimit = serverConfig?.rateLimitPerMinute ?? 0;
+            if (rateLimit > 0) {
+                const bucket = Math.floor(Date.now() / 60000);
+                const ip = getClientIp(req);
+                const key = `${ip}:${bucket}`;
+                const existing = server.__rateLimitStore ?? new Map();
+                const current = existing.get(key) ?? 0;
+                if (current >= rateLimit) {
+                    return json(res, 429, { error: "rate_limited" });
+                }
+                existing.set(key, current + 1);
+                server.__rateLimitStore = existing;
+            }
             let selectedModel = requested.explicitModel;
             let routeDecision = null;
             if (selectedModel && !catalog.find((m) => m.id === selectedModel)) {
@@ -210,32 +273,100 @@ export function startServer(options = {}) {
                     hasVision: hasVision(messages),
                     hasTools: hasTools(body),
                     catalog,
+                    config: routerConfig ?? DEFAULT_BANKR_ROUTING_CONFIG,
+                    inheritedTier,
+                    inheritedConfidence,
                 });
                 selectedModel = routeDecision.model;
             }
             if (!selectedModel) {
                 throw new Error("No model selected");
             }
+            const headers = {
+                "x-router-selected-model": selectedModel,
+                "x-router-tier": routeDecision?.tier ?? "",
+                "x-router-confidence": String(routeDecision?.confidence ?? ""),
+            };
+            if (routeDecision?.inheritedFromTier) {
+                headers["x-router-inherited-tier"] = String(routeDecision.inheritedFromTier);
+            }
             if (url.pathname === "/v1/route") {
                 return json(res, 200, {
                     requestedModel: body?.model ?? "auto",
                     selectedModel,
                     ...(routeDecision ?? {}),
+                }, headers);
+            }
+            const headersUpstream = buildUpstreamHeaders(req, loaded.catalog.bankrProviderApiKey, process.env.BANKR_LLM_KEY);
+            const upstreamBody = { ...body, model: selectedModel };
+            const retriesConfig = routerConfig?.retries ?? DEFAULT_BANKR_ROUTING_CONFIG.retries;
+            const maxAttempts = retriesConfig?.enabled ? retriesConfig.maxAttempts : 1;
+            const retryOnStatuses = retriesConfig?.retryOnStatuses ?? [];
+            const upstreamTimeout = serverConfig?.upstreamTimeoutMs ?? 60000;
+            const chain = routeDecision?.chain ?? [selectedModel];
+            let attempt = 0;
+            let lastResponse = null;
+            let responseText = "";
+            let lastStatus = null;
+            const startAt = Date.now();
+            while (attempt < maxAttempts && attempt < chain.length) {
+                const modelToTry = chain[attempt] ?? selectedModel;
+                const attemptBody = { ...upstreamBody, model: modelToTry };
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), upstreamTimeout);
+                console.error(`[bankr-router] requested=${body?.model ?? "auto"} selected=${modelToTry} prompt=${prompt.slice(0, 120).replace(/\s+/g, " ")}`);
+                try {
+                    lastResponse = await fetch(`${BANKR_UPSTREAM_BASE_URL}/chat/completions`, {
+                        method: "POST",
+                        headers: headersUpstream,
+                        body: JSON.stringify(attemptBody),
+                        signal: controller.signal,
+                    });
+                    responseText = await lastResponse.text();
+                    lastStatus = lastResponse.status;
+                }
+                catch (err) {
+                    lastStatus = null;
+                    responseText = "";
+                }
+                finally {
+                    clearTimeout(timeout);
+                }
+                if (!shouldRetry(lastStatus, retryOnStatuses)) {
+                    break;
+                }
+                console.error(`[bankr-router] retry=${attempt + 1} next=${chain[attempt + 1] ?? "none"}`);
+                attempt += 1;
+            }
+            const latencyMs = Date.now() - startAt;
+            const finalStatus = lastStatus ?? 502;
+            const retried = Math.max(0, attempt);
+            if (retried > 0) {
+                headers["x-router-retries"] = String(retried);
+            }
+            res.writeHead(finalStatus, {
+                "content-type": lastResponse?.headers.get("content-type") || "application/json; charset=utf-8",
+                ...headers,
+            });
+            res.end(responseText || "");
+            recordRequest({
+                ts: Date.now(),
+                selectedModel,
+                tier: routeDecision?.tier ?? null,
+                confidence: routeDecision?.confidence ?? 0,
+                latencyMs,
+                status: finalStatus,
+                retried,
+                inherited: Boolean(routeDecision?.inherited),
+            });
+            if (routeDecision?.tier) {
+                setConversationState(sessionId, {
+                    lastTier: routeDecision.tier,
+                    lastConfidence: routeDecision.confidence ?? 0,
+                    lastSelectedModel: selectedModel,
+                    lastUpdatedAt: Date.now(),
                 });
             }
-            const headers = buildUpstreamHeaders(req, loaded.catalog.bankrProviderApiKey, process.env.BANKR_LLM_KEY);
-            const upstreamBody = { ...body, model: selectedModel };
-            const upstreamRes = await fetch(`${BANKR_UPSTREAM_BASE_URL}/chat/completions`, {
-                method: "POST",
-                headers,
-                body: JSON.stringify(upstreamBody),
-            });
-            const responseText = await upstreamRes.text();
-            res.writeHead(upstreamRes.status, {
-                "content-type": upstreamRes.headers.get("content-type") || "application/json; charset=utf-8",
-                "x-router-selected-model": selectedModel,
-            });
-            res.end(responseText);
         }
         catch (error) {
             if (isConfigNotFoundError(error) || error instanceof OpenclawConfigNotFoundError) {

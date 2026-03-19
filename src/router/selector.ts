@@ -202,6 +202,8 @@ export function routeBankrRequest(args: {
   hasTools?: boolean;
   catalog: BankrModel[];
   config?: RoutingConfig;
+  inheritedTier?: Tier | null;
+  inheritedConfidence?: number;
 }): RoutingDecision {
   const {
     prompt,
@@ -211,7 +213,9 @@ export function routeBankrRequest(args: {
     hasVision = false,
     hasTools = false,
     catalog,
-    config = DEFAULT_BANKR_ROUTING_CONFIG
+    config = DEFAULT_BANKR_ROUTING_CONFIG,
+    inheritedTier = null,
+    inheritedConfidence = 0
   } = args;
 
   const catalogMap = new Map(catalog.map((m) => [m.id, m]));
@@ -222,6 +226,7 @@ export function routeBankrRequest(args: {
   let confidence = 0.99;
   let agenticScore = 0;
   let signals: string[] = [];
+  let inherited = false;
 
   if (estimatedTotalTokens > config.overrides.maxTokensForceComplex) {
     tier = "COMPLEX";
@@ -240,6 +245,13 @@ export function routeBankrRequest(args: {
 
     if (structured) {
       tier = minTier(tier, config.overrides.structuredOutputMinTier);
+    }
+
+    const followupConfig = config.followup;
+    if (!structured && followupConfig?.enabled && inheritedTier && inheritedConfidence >= followupConfig.inheritConfidenceFloor) {
+      tier = inheritedTier;
+      confidence = Math.max(confidence, inheritedConfidence);
+      inherited = true;
     }
   }
 
@@ -283,6 +295,8 @@ export function routeBankrRequest(args: {
     model: selected,
     tier,
     confidence,
+    inherited,
+    inheritedFromTier: inherited ? inheritedTier : null,
     method: "rules",
     reasoning: [
       `tier=${tier}`,

@@ -154,39 +154,37 @@ export const DEFAULT_BANKR_ROUTING_CONFIG = {
                 "qwen3.5-flash",
                 "deepseek-v3.2",
                 "grok-4.1-fast",
-                "gemini-3-flash",
+                "gemini-3.1-flash-lite",
                 "gemini-2.5-flash"
             ]
         },
         MEDIUM: {
             primary: "deepseek-v3.2",
             fallback: [
-                "grok-4.1-fast",
-                "qwen3.5-plus",
                 "gpt-5-mini",
-                "gemini-3-flash",
-                "minimax-m2.5"
+                "qwen3.5-plus",
+                "gemini-3.1-flash-lite",
+                "gemini-2.5-flash",
+                "grok-4.1-fast"
             ]
         },
         COMPLEX: {
-            primary: "minimax-m2.5",
+            primary: "gemini-2.5-pro",
             fallback: [
-                "qwen3-coder",
-                "kimi-k2.5",
-                "gemini-2.5-pro",
-                "gemini-3-pro",
+                "gemini-3.1-pro",
                 "gpt-5.2",
-                "claude-sonnet-4.6"
+                "claude-sonnet-4.6",
+                "kimi-k2.5",
+                "gemini-3-pro"
             ]
         },
         REASONING: {
             primary: "gpt-5.2",
             fallback: [
-                "kimi-k2.5",
-                "gemini-3-pro",
                 "gemini-2.5-pro",
-                "gpt-5.4",
                 "claude-sonnet-4.6",
+                "gpt-5.4",
+                "gemini-3.1-pro",
                 "claude-opus-4.6"
             ]
         }
@@ -197,72 +195,72 @@ export const DEFAULT_BANKR_ROUTING_CONFIG = {
             fallback: [
                 "qwen3.5-flash",
                 "deepseek-v3.2",
-                "grok-4.1-fast"
+                "grok-4.1-fast",
+                "gemini-3.1-flash-lite"
             ]
         },
         MEDIUM: {
             primary: "deepseek-v3.2",
             fallback: [
-                "qwen3.5-flash",
-                "grok-4.1-fast",
                 "qwen3.5-plus",
-                "gpt-5-mini"
+                "gpt-5-mini",
+                "gemini-3.1-flash-lite",
+                "gemini-2.5-flash"
             ]
         },
         COMPLEX: {
-            primary: "minimax-m2.5",
-            fallback: [
-                "qwen3.5-plus",
-                "deepseek-v3.2",
-                "gemini-2.5-flash",
-                "gpt-5-mini"
-            ]
-        },
-        REASONING: {
-            primary: "gpt-5.2",
+            primary: "gemini-3.1-flash-lite",
             fallback: [
                 "kimi-k2.5",
                 "gemini-2.5-pro",
-                "gemini-3-pro"
+                "qwen3.5-plus",
+                "minimax-m2.5"
+            ]
+        },
+        REASONING: {
+            primary: "kimi-k2.5",
+            fallback: [
+                "gemini-2.5-pro",
+                "gpt-5.2",
+                "gemini-3.1-pro"
             ]
         }
     },
     premiumTiers: {
         SIMPLE: {
-            primary: "grok-4.1-fast",
+            primary: "claude-haiku-4.5",
             fallback: [
-                "claude-haiku-4.5",
+                "gemini-3-flash",
                 "gpt-5-mini",
-                "gemini-3-flash"
+                "claude-sonnet-4.5"
             ]
         },
         MEDIUM: {
             primary: "claude-sonnet-4.6",
             fallback: [
                 "gpt-5.2",
-                "gpt-5.2-codex",
-                "kimi-k2.5",
-                "gemini-3-pro"
+                "gemini-3.1-pro",
+                "claude-sonnet-4.5"
             ]
         },
         COMPLEX: {
-            primary: "claude-sonnet-4.6",
+            primary: "claude-opus-4.6",
             fallback: [
                 "gpt-5.4",
-                "claude-opus-4.6",
+                "gemini-3.1-pro",
+                "claude-sonnet-4.6",
                 "claude-opus-4.5",
-                "gpt-5.2",
                 "gemini-3-pro"
             ]
         },
         REASONING: {
-            primary: "claude-opus-4.6",
+            primary: "gpt-5.4",
             fallback: [
-                "gpt-5.4",
-                "claude-opus-4.5",
-                "gpt-5.2",
+                "claude-opus-4.6",
                 "claude-sonnet-4.6",
-                "kimi-k2.5"
+                "gpt-5.2",
+                "gemini-3.1-pro",
+                "claude-opus-4.5"
             ]
         }
     },
@@ -309,5 +307,21 @@ export const DEFAULT_BANKR_ROUTING_CONFIG = {
         structuredOutputMinTier: "MEDIUM",
         ambiguousDefaultTier: "MEDIUM",
         enableAgenticAuto: true
+    },
+    followup: {
+        enabled: true,
+        maxAgeMs: 10 * 60 * 1000,
+        shortPromptMaxChars: 80,
+        inheritConfidenceFloor: 0.72
+    },
+    retries: {
+        enabled: true,
+        maxAttempts: 3,
+        retryOnStatuses: [408, 429, 500, 502, 503, 504]
+    },
+    server: {
+        authToken: process.env.BANKR_ROUTER_AUTH_TOKEN || "",
+        rateLimitPerMinute: Number(process.env.BANKR_ROUTER_RATE_LIMIT || 100),
+        upstreamTimeoutMs: Number(process.env.BANKR_ROUTER_TIMEOUT_MS || 60000)
     }
 };
