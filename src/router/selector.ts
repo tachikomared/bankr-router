@@ -328,6 +328,7 @@ export function routeBankrRequest(args: {
 
   return {
     model: selected,
+    plannedModel: selected,
     tier,
     confidence,
     inherited,

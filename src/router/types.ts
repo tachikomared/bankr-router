@@ -110,6 +110,7 @@ export type RankedCandidate = {
 
 export type RoutingDecision = {
   model: string;
+  plannedModel?: string;
   tier: Tier;
   confidence: number;
   chain: string[];

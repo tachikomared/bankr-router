@@ -358,6 +358,7 @@ export function startServer(options: StartServerOptions = {}) {
       }
 
       let selectedModel = requested.explicitModel;
+      let plannedModel: string | null = null;
       let routeDecision: any = null;
 
       if (selectedModel && !catalog.find((m) => m.id === selectedModel)) {
@@ -386,8 +387,11 @@ export function startServer(options: StartServerOptions = {}) {
         throw new Error("No model selected");
       }
 
+      plannedModel = selectedModel;
+
       const headers: Record<string, string> = {
-        "x-router-selected-model": selectedModel,
+        "x-router-planned-model": plannedModel,
+        "x-router-selected-model": plannedModel,
         "x-router-tier": routeDecision?.tier ?? "",
         "x-router-confidence": String(routeDecision?.confidence ?? ""),
       };
@@ -397,11 +401,17 @@ export function startServer(options: StartServerOptions = {}) {
       }
 
       if (url.pathname === "/v1/route") {
-        return json(res, 200, {
-          requestedModel: body?.model ?? "auto",
-          selectedModel,
-          ...(routeDecision ?? {}),
-        }, headers);
+        const { model: _plannedFromDecision, ...decisionPayload } = routeDecision ?? {};
+        return json(
+          res,
+          200,
+          {
+            requestedModel: body?.model ?? "auto",
+            plannedModel,
+            ...decisionPayload,
+          },
+          headers
+        );
       }
 
       const headersUpstream = buildUpstreamHeaders(
@@ -410,23 +420,27 @@ export function startServer(options: StartServerOptions = {}) {
         process.env.BANKR_LLM_KEY,
       );
 
-      const upstreamBody = { ...body, model: selectedModel };
+      const upstreamBody = { ...body, model: plannedModel };
 
       const retriesConfig = routerConfig?.retries ?? DEFAULT_BANKR_ROUTING_CONFIG.retries;
       const maxAttempts = retriesConfig?.enabled ? retriesConfig.maxAttempts : 1;
       const retryOnStatuses = retriesConfig?.retryOnStatuses ?? [];
       const upstreamTimeout = serverConfig?.upstreamTimeoutMs ?? 60000;
 
-      const chain = routeDecision?.chain ?? [selectedModel];
+      const chain = routeDecision?.chain ?? [plannedModel];
       let attempt = 0;
       let lastResponse: Response | null = null;
       let responseText = "";
       let lastStatus: number | null = null;
+      let finalModel: string | null = null;
+      let upstreamModel: string | null = null;
+      const attemptedModels: string[] = [];
 
       const startAt = Date.now();
 
       while (attempt < maxAttempts && attempt < chain.length) {
-        const modelToTry = chain[attempt] ?? selectedModel;
+        const modelToTry = chain[attempt] ?? plannedModel;
+        attemptedModels.push(modelToTry);
         const attemptBody = { ...upstreamBody, model: modelToTry };
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), upstreamTimeout);
@@ -445,6 +459,18 @@ export function startServer(options: StartServerOptions = {}) {
 
           responseText = await lastResponse.text();
           lastStatus = lastResponse.status;
+
+          if (lastStatus && lastStatus < 400) {
+            finalModel = modelToTry;
+            try {
+              const parsed = JSON.parse(responseText);
+              if (parsed?.model) {
+                upstreamModel = String(parsed.model);
+              }
+            } catch (err) {
+              // ignore parse errors
+            }
+          }
         } catch (err) {
           lastStatus = null;
           responseText = "";
@@ -468,6 +494,19 @@ export function startServer(options: StartServerOptions = {}) {
         headers["x-router-retries"] = String(retried);
       }
 
+      const attemptsHeader = attemptedModels.length ? attemptedModels.join(",") : plannedModel;
+      const finalResolvedModel = finalModel ?? attemptedModels[attemptedModels.length - 1] ?? plannedModel;
+
+      headers["x-router-final-model"] = finalResolvedModel ?? "";
+      headers["x-router-attempts"] = String(attemptedModels.length || 1);
+      headers["x-router-attempted-models"] = attemptsHeader ?? "";
+      if (upstreamModel) {
+        headers["x-router-upstream-model"] = upstreamModel;
+      }
+
+      // keep x-router-selected-model aligned with final model (legacy header)
+      headers["x-router-selected-model"] = finalResolvedModel ?? "";
+
       res.writeHead(finalStatus, {
         "content-type":
           lastResponse?.headers.get("content-type") || "application/json; charset=utf-8",
@@ -478,7 +517,7 @@ export function startServer(options: StartServerOptions = {}) {
 
       recordRequest({
         ts: Date.now(),
-        selectedModel,
+        selectedModel: finalResolvedModel ?? plannedModel,
         tier: routeDecision?.tier ?? null,
         confidence: routeDecision?.confidence ?? 0,
         latencyMs,
@@ -491,9 +530,9 @@ export function startServer(options: StartServerOptions = {}) {
       });
 
       if (finalStatus < 400) {
-        recordSuccess(selectedModel, latencyMs, hasTools(body), isStructuredOutput(body));
+        recordSuccess(finalResolvedModel ?? plannedModel, latencyMs, hasTools(body), isStructuredOutput(body));
       } else {
-        recordError(selectedModel, finalStatus);
+        recordError(finalResolvedModel ?? plannedModel, finalStatus);
       }
 
       if (routeDecision?.tier) {

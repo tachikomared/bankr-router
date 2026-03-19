@@ -273,6 +273,7 @@ export function startServer(options = {}) {
                 server.__rateLimitStore = existing;
             }
             let selectedModel = requested.explicitModel;
+            let plannedModel = null;
             let routeDecision = null;
             if (selectedModel && !catalog.find((m) => m.id === selectedModel)) {
                 throw new Error(`Requested model not found in BANKR catalog: ${selectedModel}`);
@@ -296,8 +297,10 @@ export function startServer(options = {}) {
             if (!selectedModel) {
                 throw new Error("No model selected");
             }
+            plannedModel = selectedModel;
             const headers = {
-                "x-router-selected-model": selectedModel,
+                "x-router-planned-model": plannedModel,
+                "x-router-selected-model": plannedModel,
                 "x-router-tier": routeDecision?.tier ?? "",
                 "x-router-confidence": String(routeDecision?.confidence ?? ""),
             };
@@ -305,26 +308,31 @@ export function startServer(options = {}) {
                 headers["x-router-inherited-tier"] = String(routeDecision.inheritedFromTier);
             }
             if (url.pathname === "/v1/route") {
+                const { model: _plannedFromDecision, ...decisionPayload } = routeDecision ?? {};
                 return json(res, 200, {
                     requestedModel: body?.model ?? "auto",
-                    selectedModel,
-                    ...(routeDecision ?? {}),
+                    plannedModel,
+                    ...decisionPayload,
                 }, headers);
             }
             const headersUpstream = buildUpstreamHeaders(req, loaded.catalog.bankrProviderApiKey, process.env.BANKR_LLM_KEY);
-            const upstreamBody = { ...body, model: selectedModel };
+            const upstreamBody = { ...body, model: plannedModel };
             const retriesConfig = routerConfig?.retries ?? DEFAULT_BANKR_ROUTING_CONFIG.retries;
             const maxAttempts = retriesConfig?.enabled ? retriesConfig.maxAttempts : 1;
             const retryOnStatuses = retriesConfig?.retryOnStatuses ?? [];
             const upstreamTimeout = serverConfig?.upstreamTimeoutMs ?? 60000;
-            const chain = routeDecision?.chain ?? [selectedModel];
+            const chain = routeDecision?.chain ?? [plannedModel];
             let attempt = 0;
             let lastResponse = null;
             let responseText = "";
             let lastStatus = null;
+            let finalModel = null;
+            let upstreamModel = null;
+            const attemptedModels = [];
             const startAt = Date.now();
             while (attempt < maxAttempts && attempt < chain.length) {
-                const modelToTry = chain[attempt] ?? selectedModel;
+                const modelToTry = chain[attempt] ?? plannedModel;
+                attemptedModels.push(modelToTry);
                 const attemptBody = { ...upstreamBody, model: modelToTry };
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), upstreamTimeout);
@@ -338,6 +346,18 @@ export function startServer(options = {}) {
                     });
                     responseText = await lastResponse.text();
                     lastStatus = lastResponse.status;
+                    if (lastStatus && lastStatus < 400) {
+                        finalModel = modelToTry;
+                        try {
+                            const parsed = JSON.parse(responseText);
+                            if (parsed?.model) {
+                                upstreamModel = String(parsed.model);
+                            }
+                        }
+                        catch (err) {
+                            // ignore parse errors
+                        }
+                    }
                 }
                 catch (err) {
                     lastStatus = null;
@@ -358,6 +378,16 @@ export function startServer(options = {}) {
             if (retried > 0) {
                 headers["x-router-retries"] = String(retried);
             }
+            const attemptsHeader = attemptedModels.length ? attemptedModels.join(",") : plannedModel;
+            const finalResolvedModel = finalModel ?? attemptedModels[attemptedModels.length - 1] ?? plannedModel;
+            headers["x-router-final-model"] = finalResolvedModel ?? "";
+            headers["x-router-attempts"] = String(attemptedModels.length || 1);
+            headers["x-router-attempted-models"] = attemptsHeader ?? "";
+            if (upstreamModel) {
+                headers["x-router-upstream-model"] = upstreamModel;
+            }
+            // keep x-router-selected-model aligned with final model (legacy header)
+            headers["x-router-selected-model"] = finalResolvedModel ?? "";
             res.writeHead(finalStatus, {
                 "content-type": lastResponse?.headers.get("content-type") || "application/json; charset=utf-8",
                 ...headers,
@@ -365,7 +395,7 @@ export function startServer(options = {}) {
             res.end(responseText || "");
             recordRequest({
                 ts: Date.now(),
-                selectedModel,
+                selectedModel: finalResolvedModel ?? plannedModel,
                 tier: routeDecision?.tier ?? null,
                 confidence: routeDecision?.confidence ?? 0,
                 latencyMs,
@@ -377,10 +407,10 @@ export function startServer(options = {}) {
                 codeHeavy: routeDecision?.codeHeavy ?? false,
             });
             if (finalStatus < 400) {
-                recordSuccess(selectedModel, latencyMs, hasTools(body), isStructuredOutput(body));
+                recordSuccess(finalResolvedModel ?? plannedModel, latencyMs, hasTools(body), isStructuredOutput(body));
             }
             else {
-                recordError(selectedModel, finalStatus);
+                recordError(finalResolvedModel ?? plannedModel, finalStatus);
             }
             if (routeDecision?.tier) {
                 setConversationState(sessionId, {
