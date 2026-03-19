@@ -5,6 +5,8 @@ If you want the agent to use a skill, just send one of these:
 - a local file path to SKILL.md or a reference file
 - a pasted skill file if the link is not available
 
+Example: **install skill** + https://github.com/tachikomared/bankr-router/tree/master/skills/bankr-router
+
 The agent will read the skill first, then follow the instructions in it.
 
 ---
