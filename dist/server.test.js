@@ -11,9 +11,31 @@ describe("server v0.8.0", () => {
     // Use model IDs that match DEFAULT_BANKR_ROUTING_CONFIG tiers
     const mockCatalog = [
         { id: "gpt-5-nano", name: "GPT-5 Nano", contextWindow: 128000, cost: { input: 0.1, output: 0.3 } },
+        { id: "gpt-5.4-nano", name: "GPT-5.4 Nano", contextWindow: 128000, cost: { input: 0.1, output: 0.3 } },
+        { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", contextWindow: 128000, cost: { input: 0.3, output: 1.2 } },
+        { id: "gpt-5.4", name: "GPT-5.4", contextWindow: 128000, cost: { input: 0.6, output: 1.8 } },
         { id: "deepseek-v3.2", name: "DeepSeek V3.2", contextWindow: 128000, cost: { input: 0.2, output: 0.6 } },
-        { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", contextWindow: 128000, cost: { input: 0.5, output: 1.5 } },
+        { id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite", contextWindow: 128000, cost: { input: 0.075, output: 0.3 } },
+        { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro", contextWindow: 128000, cost: { input: 1.25, output: 5.0 } },
+        { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6", contextWindow: 128000, cost: { input: 0.3, output: 1.2 } },
+        { id: "claude-opus-4.6", name: "Claude Opus 4.6", contextWindow: 128000, cost: { input: 3.0, output: 15.0 } },
+        { id: "minimax-m2.7", name: "MiniMax M2.7", contextWindow: 128000, cost: { input: 0.3, output: 0.9 } },
+        { id: "glm-5", name: "GLM-5", contextWindow: 128000, cost: { input: 0.72, output: 2.3 } },
+        { id: "qwen3-coder", name: "Qwen 3 Coder", contextWindow: 128000, cost: { input: 0.2, output: 0.6 } },
+        { id: "gpt-5-mini", name: "GPT-5 Mini", contextWindow: 128000, cost: { input: 0.4, output: 1.2 } },
         { id: "gpt-5.2", name: "GPT-5.2", contextWindow: 128000, cost: { input: 1.0, output: 3.0 } },
+        { id: "gpt-5.2-codex", name: "GPT-5.2 Codex", contextWindow: 128000, cost: { input: 1.0, output: 3.0 } },
+        { id: "claude-sonnet-4.5", name: "Claude Sonnet 4.5", contextWindow: 128000, cost: { input: 0.3, output: 1.2 } },
+        { id: "claude-opus-4.5", name: "Claude Opus 4.5", contextWindow: 128000, cost: { input: 3.0, output: 15.0 } },
+        { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", contextWindow: 128000, cost: { input: 0.1, output: 0.4 } },
+        { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", contextWindow: 128000, cost: { input: 0.5, output: 1.5 } },
+        { id: "grok-4.1-fast", name: "Grok 4.1 Fast", contextWindow: 128000, cost: { input: 0.3, output: 0.9 } },
+        { id: "qwen3.5-flash", name: "Qwen 3.5 Flash", contextWindow: 128000, cost: { input: 0.14, output: 0.28 } },
+        { id: "qwen3.5-plus", name: "Qwen 3.5 Plus", contextWindow: 128000, cost: { input: 0.28, output: 0.56 } },
+        { id: "gemini-3-flash", name: "Gemini 3 Flash", contextWindow: 128000, cost: { input: 0.1, output: 0.4 } },
+        { id: "gemini-3-pro", name: "Gemini 3 Pro", contextWindow: 128000, cost: { input: 2.5, output: 10.0 } },
+        { id: "kimi-k2.5", name: "Kimi K2.5", contextWindow: 128000, cost: { input: 0.35, output: 1.05 } },
+        { id: "minimax-m2.5", name: "MiniMax M2.5", contextWindow: 128000, cost: { input: 0.3, output: 0.9 } },
     ];
     before(async () => {
         // Create test config

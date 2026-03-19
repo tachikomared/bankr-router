@@ -164,30 +164,96 @@ function codeAffinityBonus(modelId: string, codeHeavy: boolean): number {
   return 0;
 }
 
-function rerankForCodeHeavy(ranked: RankedCandidate[], catalog: Map<string, BankrModel>, profile: RoutingProfile): RankedCandidate[] {
-  const codeSpecialized = ranked.filter((candidate) => {
-    const id = candidate.id.toLowerCase();
-    if (profile === "eco" && id.includes("coder")) return true;
-    if (profile === "premium" && id.includes("codex")) return true;
-    return false;
-  });
+function rerankByPriority(
+  ranked: RankedCandidate[],
+  priorityList: string[]
+): RankedCandidate[] {
+  const priorityModels = priorityList
+    .map((id) => ranked.find((c) => c.id === id))
+    .filter((x): x is RankedCandidate => !!x);
 
-  if (codeSpecialized.length === 0) return ranked;
+  if (!priorityModels.length) return ranked;
 
-  const standardModels = ranked.filter((candidate) => !codeSpecialized.includes(candidate));
-  return [...codeSpecialized, ...standardModels];
+  const remainder = ranked.filter((candidate) => !priorityModels.includes(candidate));
+  priorityModels.sort((a, b) => (a.estimatedCost ?? Infinity) - (b.estimatedCost ?? Infinity));
+  return [...priorityModels, ...remainder];
 }
 
-function rerankForToolAndStructured(ranked: RankedCandidate[], catalog: Map<string, BankrModel>, tools: boolean, structured: boolean): RankedCandidate[] {
+function rerankForCodeHeavy(ranked: RankedCandidate[], profile: RoutingProfile): RankedCandidate[] {
+  const CODE_HEAVY_PRIORITY_AUTO = [
+    "qwen3-coder",
+    "deepseek-v3.2",
+    "gpt-5.4-mini",
+    "claude-sonnet-4.6",
+    "gpt-5.2-codex",
+  ];
+
+  const CODE_HEAVY_PRIORITY_ECO = [
+    "qwen3-coder",
+    "deepseek-v3.2",
+    "gemini-3.1-flash-lite",
+    "qwen3.5-plus",
+    "gpt-5-mini",
+  ];
+
+  const CODE_HEAVY_PRIORITY_PREMIUM = [
+    "gpt-5.4",
+    "claude-sonnet-4.6",
+    "gpt-5.2-codex",
+    "claude-opus-4.6",
+    "gemini-3.1-pro",
+  ];
+
+  const priorityList =
+    profile === "eco"
+      ? CODE_HEAVY_PRIORITY_ECO
+      : profile === "premium"
+        ? CODE_HEAVY_PRIORITY_PREMIUM
+        : CODE_HEAVY_PRIORITY_AUTO;
+
+  return rerankByPriority(ranked, priorityList);
+}
+
+function rerankForToolAndStructured(
+  ranked: RankedCandidate[],
+  profile: RoutingProfile,
+  tools: boolean,
+  structured: boolean
+): RankedCandidate[] {
   if (!tools && !structured) return ranked;
 
-  const strongModels = ranked.filter((candidate) => {
-    const model = catalog.get(candidate.id);
-    return model?.supportsTools !== false && model?.contextWindow && model?.contextWindow >= 128000;
-  });
+  const TOOL_STRUCTURED_PRIORITY_AUTO = [
+    "gpt-5.4-mini",
+    "claude-sonnet-4.6",
+    "gemini-3.1-pro",
+    "deepseek-v3.2",
+    "gemini-3.1-flash-lite",
+  ];
 
-  const weakModels = ranked.filter((candidate) => !strongModels.includes(candidate));
-  return [...strongModels, ...weakModels];
+  const TOOL_STRUCTURED_PRIORITY_ECO = [
+    "deepseek-v3.2",
+    "gemini-3.1-flash-lite",
+    "gpt-5-mini",
+    "qwen3.5-plus",
+    "grok-4.1-fast",
+  ];
+
+  const TOOL_STRUCTURED_PRIORITY_PREMIUM = [
+    "claude-sonnet-4.6",
+    "gpt-5.4",
+    "claude-opus-4.6",
+    "gemini-3.1-pro",
+    "gpt-5.2",
+  ];
+
+  const priorityList =
+    profile === "eco"
+      ? TOOL_STRUCTURED_PRIORITY_ECO
+      : profile === "premium"
+        ? TOOL_STRUCTURED_PRIORITY_PREMIUM
+        : TOOL_STRUCTURED_PRIORITY_AUTO;
+
+  return rerankByPriority(ranked, priorityList);
 }
 
 function pickCheapestInChain(
@@ -305,9 +371,9 @@ export function routeBankrRequest(args: {
   const codeHeavy = looksCodeHeavy(prompt, systemPrompt);
 
   let reranked = ranked;
-  reranked = rerankForCodeHeavy(reranked, catalogMap, profile);
+  reranked = rerankForCodeHeavy(reranked, profile);
   const isStructured = structuredOutput || (systemPrompt ?? "").toLowerCase().includes("json") || prompt.toLowerCase().includes("json") || prompt.toLowerCase().includes("yaml");
-  reranked = rerankForToolAndStructured(reranked, catalogMap, hasTools, isStructured);
+  reranked = rerankForToolAndStructured(reranked, profile, hasTools, isStructured);
 
   if (!reranked.length) {
     throw new Error(`No eligible BANKR models with finite cost in tier ${tier}`);
