@@ -1,3 +1,14 @@
+# How to feed the agent a skill link or file
+
+If you want the agent to use a skill, just send one of these:
+- a GitHub link to the skill folder or SKILL.md file
+- a local file path to SKILL.md or a reference file
+- a pasted skill file if the link is not available
+
+The agent will read the skill first, then follow the instructions in it.
+
+---
+
 # Bankr Router
 
 **Smart AI Model Router for OpenClaw + Bankr Gateway**
