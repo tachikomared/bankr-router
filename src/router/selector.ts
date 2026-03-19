@@ -164,6 +164,98 @@ function codeAffinityBonus(modelId: string, codeHeavy: boolean): number {
   return 0;
 }
 
+function rerankByPriority(
+  ranked: RankedCandidate[],
+  priorityList: string[]
+): RankedCandidate[] {
+  const priorityModels = priorityList
+    .map((id) => ranked.find((c) => c.id === id))
+    .filter((x): x is RankedCandidate => !!x);
+
+  if (!priorityModels.length) return ranked;
+
+  const remainder = ranked.filter((candidate) => !priorityModels.includes(candidate));
+  priorityModels.sort((a, b) => (a.estimatedCost ?? Infinity) - (b.estimatedCost ?? Infinity));
+  return [...priorityModels, ...remainder];
+}
+
+function rerankForCodeHeavy(ranked: RankedCandidate[], profile: RoutingProfile): RankedCandidate[] {
+  const CODE_HEAVY_PRIORITY_AUTO = [
+    "qwen3-coder",
+    "deepseek-v3.2",
+    "gpt-5.4-mini",
+    "claude-sonnet-4.6",
+    "gpt-5.2-codex",
+  ];
+
+  const CODE_HEAVY_PRIORITY_ECO = [
+    "qwen3-coder",
+    "deepseek-v3.2",
+    "gemini-3.1-flash-lite",
+    "qwen3.5-plus",
+    "gpt-5-mini",
+  ];
+
+  const CODE_HEAVY_PRIORITY_PREMIUM = [
+    "gpt-5.4",
+    "claude-sonnet-4.6",
+    "gpt-5.2-codex",
+    "claude-opus-4.6",
+    "gemini-3.1-pro",
+  ];
+
+  const priorityList =
+    profile === "eco"
+      ? CODE_HEAVY_PRIORITY_ECO
+      : profile === "premium"
+        ? CODE_HEAVY_PRIORITY_PREMIUM
+        : CODE_HEAVY_PRIORITY_AUTO;
+
+  return rerankByPriority(ranked, priorityList);
+}
+
+function rerankForToolAndStructured(
+  ranked: RankedCandidate[],
+  profile: RoutingProfile,
+  tools: boolean,
+  structured: boolean
+): RankedCandidate[] {
+  if (!tools && !structured) return ranked;
+
+  const TOOL_STRUCTURED_PRIORITY_AUTO = [
+    "gpt-5.4-mini",
+    "claude-sonnet-4.6",
+    "gemini-3.1-pro",
+    "deepseek-v3.2",
+    "gemini-3.1-flash-lite",
+  ];
+
+  const TOOL_STRUCTURED_PRIORITY_ECO = [
+    "deepseek-v3.2",
+    "gemini-3.1-flash-lite",
+    "gpt-5-mini",
+    "qwen3.5-plus",
+    "grok-4.1-fast",
+  ];
+
+  const TOOL_STRUCTURED_PRIORITY_PREMIUM = [
+    "claude-sonnet-4.6",
+    "gpt-5.4",
+    "claude-opus-4.6",
+    "gemini-3.1-pro",
+    "gpt-5.2",
+  ];
+
+  const priorityList =
+    profile === "eco"
+      ? TOOL_STRUCTURED_PRIORITY_ECO
+      : profile === "premium"
+        ? TOOL_STRUCTURED_PRIORITY_PREMIUM
+        : TOOL_STRUCTURED_PRIORITY_AUTO;
+
+  return rerankByPriority(ranked, priorityList);
+}
+
 function pickCheapestInChain(
   chain: string[],
   catalog: Map<string, BankrModel>,
@@ -180,16 +272,18 @@ function pickCheapestInChain(
       if (!model) return null;
 
       const rawCost = estimateModelCost(model, estimatedInputTokens, maxOutputTokens);
-      const adjustedCost = rawCost + codeAffinityBonus(id, codeHeavy);
+      const estimatedCost = Number.isFinite(rawCost) ? Math.max(0, rawCost) : Number.POSITIVE_INFINITY;
+      const rankingScore = rawCost + codeAffinityBonus(id, codeHeavy);
 
       return {
         id,
-        estimatedCost: adjustedCost
-      };
+        estimatedCost,
+        rankingScore
+      } as RankedCandidate;
     })
-    .filter((x): x is RankedCandidate => !!x && Number.isFinite(x.estimatedCost));
+    .filter((x): x is RankedCandidate => !!x && Number.isFinite((x as RankedCandidate).rankingScore ?? Number.POSITIVE_INFINITY));
 
-  ranked.sort((a, b) => a.estimatedCost - b.estimatedCost);
+  ranked.sort((a, b) => (a.rankingScore ?? a.estimatedCost) - (b.rankingScore ?? b.estimatedCost));
   return ranked;
 }
 
@@ -202,6 +296,9 @@ export function routeBankrRequest(args: {
   hasTools?: boolean;
   catalog: BankrModel[];
   config?: RoutingConfig;
+  inheritedTier?: Tier | null;
+  inheritedConfidence?: number;
+  structuredOutput?: boolean;
 }): RoutingDecision {
   const {
     prompt,
@@ -211,7 +308,10 @@ export function routeBankrRequest(args: {
     hasVision = false,
     hasTools = false,
     catalog,
-    config = DEFAULT_BANKR_ROUTING_CONFIG
+    config = DEFAULT_BANKR_ROUTING_CONFIG,
+    inheritedTier = null,
+    inheritedConfidence = 0,
+    structuredOutput = false
   } = args;
 
   const catalogMap = new Map(catalog.map((m) => [m.id, m]));
@@ -222,6 +322,7 @@ export function routeBankrRequest(args: {
   let confidence = 0.99;
   let agenticScore = 0;
   let signals: string[] = [];
+  let inherited = false;
 
   if (estimatedTotalTokens > config.overrides.maxTokensForceComplex) {
     tier = "COMPLEX";
@@ -232,14 +333,21 @@ export function routeBankrRequest(args: {
     agenticScore = ruleResult.agenticScore;
     signals = ruleResult.signals;
 
-    const structured =
+    const structuredDetected = structuredOutput ||
       (systemPrompt ?? "").toLowerCase().includes("json") ||
       (systemPrompt ?? "").toLowerCase().includes("yaml") ||
       prompt.toLowerCase().includes("json") ||
       prompt.toLowerCase().includes("yaml");
 
-    if (structured) {
+    if (structuredDetected) {
       tier = minTier(tier, config.overrides.structuredOutputMinTier);
+    }
+
+    const followupConfig = config.followup;
+    if (!structuredDetected && followupConfig?.enabled && inheritedTier && inheritedConfidence >= followupConfig.inheritConfidenceFloor) {
+      tier = inheritedTier;
+      confidence = Math.max(confidence, inheritedConfidence);
+      inherited = true;
     }
   }
 
@@ -260,11 +368,18 @@ export function routeBankrRequest(args: {
     systemPrompt
   );
 
-  if (!ranked.length) {
+  const codeHeavy = looksCodeHeavy(prompt, systemPrompt);
+
+  let reranked = ranked;
+  reranked = rerankForCodeHeavy(reranked, profile);
+  const isStructured = structuredOutput || (systemPrompt ?? "").toLowerCase().includes("json") || prompt.toLowerCase().includes("json") || prompt.toLowerCase().includes("yaml");
+  reranked = rerankForToolAndStructured(reranked, profile, hasTools, isStructured);
+
+  if (!reranked.length) {
     throw new Error(`No eligible BANKR models with finite cost in tier ${tier}`);
   }
 
-  const selected = ranked[0].id;
+  const selected = reranked[0].id;
   const baselineModel =
     catalogMap.get("claude-opus-4.6") ??
     catalogMap.get("claude-opus-4.5") ??
@@ -281,8 +396,14 @@ export function routeBankrRequest(args: {
 
   return {
     model: selected,
+    plannedModel: selected,
     tier,
     confidence,
+    inherited,
+    inheritedFromTier: inherited ? inheritedTier : null,
+    toolsDetected: hasTools,
+    structuredOutput: isStructured,
+    codeHeavy,
     method: "rules",
     reasoning: [
       `tier=${tier}`,
@@ -294,9 +415,10 @@ export function routeBankrRequest(args: {
     savings,
     agenticScore,
     chain,
-    ranked: ranked.map((r) => ({
+    ranked: reranked.map((r: any) => ({
       id: r.id,
-      estimatedCost: Number.isFinite(r.estimatedCost) ? r.estimatedCost : 999999
+      estimatedCost: Number.isFinite(r.estimatedCost) ? r.estimatedCost : 999999,
+      rankingScore: Number.isFinite(r.rankingScore) ? r.rankingScore : undefined
     }))
   };
 }

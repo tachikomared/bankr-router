@@ -1,6 +1,6 @@
 {
   "name": "@bankrbot/bankr-router",
-  "version": "0.5.5",
+  "version": "0.8.2",
   "description": "Local BANKR-only smart router plugin for OpenClaw",
   "type": "module",
   "main": "dist/index.js",

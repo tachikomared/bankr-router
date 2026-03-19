@@ -1,0 +1,2 @@
+{"ts":"2026-03-19T17:28:21.611Z","plannedModel":"gpt-5-nano","finalModel":"gpt-5-nano","tier":"SIMPLE","confidence":0.9,"retryCount":0,"statusCode":200,"latencyMs":123,"toolsDetected":false,"structuredOutput":false,"codeHeavy":false,"promptHash":"abc","abortSource":null}
+{"ts":"2026-03-19T17:28:27.702Z","plannedModel":"gpt-5-nano","finalModel":"gpt-5-nano","tier":"SIMPLE","confidence":0.9,"retryCount":0,"statusCode":500,"latencyMs":0,"toolsDetected":false,"structuredOutput":false,"codeHeavy":false,"promptHash":"abc","abortSource":"request_timeout"}

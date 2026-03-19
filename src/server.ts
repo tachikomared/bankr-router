@@ -1,16 +1,26 @@
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import {
   buildCatalogLoadError,
-  loadBankrCatalogWithDiscovery,
+  loadBankrCatalogCachedWithDiscovery,
   isConfigNotFoundError,
 } from "./catalog.js";
 import { routeBankrRequest } from "./router/selector.js";
-import type { RoutingProfile } from "./router/types.js";
+import type { RoutingProfile, Tier } from "./router/types.js";
+import { DEFAULT_BANKR_ROUTING_CONFIG } from "./router/config.js";
 import {
   resolveOpenclawConfigPath,
   requireOpenclawConfigPath,
   OpenclawConfigNotFoundError,
 } from "./config-path.js";
+import {
+  getConversationState,
+  getSessionId,
+  isFollowupPrompt,
+  setConversationState,
+} from "./context.js";
+import { getHealthSummary, getStats, recordRequest } from "./stats.js";
+import { recordSuccess, recordError } from "./reliability.js";
+import { hashPrompt, logRequest } from "./logging.js";
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const BANKR_UPSTREAM_BASE_URL = "https://llm.bankr.bot/v1";
@@ -31,14 +41,35 @@ type MessageContentPart = {
 
 const DEBUG_ENABLED = process.env.BANKR_ROUTER_DEBUG === "1";
 
-function json(res: ServerResponse, status: number, obj: unknown) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+function json(res: ServerResponse, status: number, obj: unknown, headers?: Record<string, string>) {
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...(headers ?? {}) });
   res.end(JSON.stringify(obj, null, 2));
 }
 
 function debugLog(...args: unknown[]) {
   if (!DEBUG_ENABLED) return;
   console.error("[bankr-router]", ...args);
+}
+
+function getClientIp(req: IncomingMessage): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+  return req.socket.remoteAddress || "unknown";
+}
+
+function parseAuth(req: IncomingMessage): string | null {
+  const auth = req.headers.authorization;
+  if (!auth || typeof auth !== "string") return null;
+  const [scheme, token] = auth.split(" ");
+  if (scheme?.toLowerCase() !== "bearer" || !token) return null;
+  return token.trim();
+}
+
+function shouldRetry(status: number | null, retryOn: number[]): boolean {
+  if (status == null) return true;
+  return retryOn.includes(status);
 }
 
 function buildConfigNotFoundError(attemptedPaths: string[]) {
@@ -134,6 +165,28 @@ function hasTools(body: any): boolean {
   return Array.isArray(body?.tools) && body.tools.length > 0;
 }
 
+function isStructuredOutput(body: any): boolean {
+  const formatType = body?.response_format?.type ?? body?.response_format;
+  if (typeof formatType === "string") {
+    const normalized = formatType.toLowerCase();
+    if (normalized === "json" || normalized === "json_object" || normalized === "json_schema") {
+      return true;
+    }
+  }
+
+  const schema = body?.response_format?.schema ?? body?.response_format?.json_schema;
+  if (schema) return true;
+
+  const prompt = extractPromptText(body?.messages ?? []);
+  const system = extractSystemPrompt(body?.messages ?? []);
+  return (
+    (system ?? "").toLowerCase().includes("json") ||
+    (system ?? "").toLowerCase().includes("yaml") ||
+    prompt.toLowerCase().includes("json") ||
+    prompt.toLowerCase().includes("yaml")
+  );
+}
+
 function normalizeRequestedModel(
   model: string | undefined,
   routerProviderId: string,
@@ -216,7 +269,12 @@ export function startServer(options: StartServerOptions = {}) {
           ok: true,
           name: "bankr-router",
           upstream: BANKR_UPSTREAM_BASE_URL,
+          ...getHealthSummary(),
         });
+      }
+
+      if (req.method === "GET" && url.pathname === "/v1/stats") {
+        return json(res, 200, getStats());
       }
 
       if (req.method === "GET" && url.pathname === "/v1/models") {
@@ -256,19 +314,63 @@ export function startServer(options: StartServerOptions = {}) {
         explicitPath: configPath ?? null,
       });
 
-      const loaded = loadBankrCatalogWithDiscovery({
+      const loaded = loadBankrCatalogCachedWithDiscovery({
         openclawConfigPath: selectedPath,
         providerId: bankrProviderId,
       });
 
       const catalog = loaded.catalog.models;
+      const routerConfig = DEFAULT_BANKR_ROUTING_CONFIG;
 
       const requested = normalizeRequestedModel(body?.model, routerProviderId);
       const prompt = extractPromptText(messages);
       const systemPrompt = extractSystemPrompt(messages);
 
+      const sessionId = getSessionId(req, body);
+      const followupConfig = routerConfig.followup;
+      const promptIsFollowup = followupConfig
+        ? isFollowupPrompt(prompt, followupConfig.shortPromptMaxChars)
+        : false;
+
+      let inheritedTier: Tier | null = null;
+      let inheritedConfidence = 0;
+
+      if (promptIsFollowup && followupConfig?.enabled) {
+        const previous = getConversationState(sessionId);
+        if (previous && Date.now() - previous.lastUpdatedAt <= followupConfig.maxAgeMs) {
+          inheritedTier = previous.lastTier;
+          inheritedConfidence = previous.lastConfidence;
+        }
+      }
+
+      const serverConfig = routerConfig?.server ?? DEFAULT_BANKR_ROUTING_CONFIG.server;
+      if (serverConfig?.authToken) {
+        const token = parseAuth(req);
+        if (!token || token !== serverConfig.authToken) {
+          return json(res, 401, { error: "unauthorized" });
+        }
+      }
+
+      const rateLimit = serverConfig?.rateLimitPerMinute ?? 0;
+      if (rateLimit > 0) {
+        const bucket = Math.floor(Date.now() / 60000);
+        const ip = getClientIp(req);
+        const key = `${ip}:${bucket}`;
+        const existing = (server as any).__rateLimitStore ?? new Map<string, number>();
+        const current = existing.get(key) ?? 0;
+        if (current >= rateLimit) {
+          return json(res, 429, { error: "rate_limited" });
+        }
+        existing.set(key, current + 1);
+        (server as any).__rateLimitStore = existing;
+      }
+
       let selectedModel = requested.explicitModel;
+      let plannedModel: string | null = null;
       let routeDecision: any = null;
+
+      const toolsDetected = hasTools(body);
+      const structuredOutput = isStructuredOutput(body);
 
       if (selectedModel && !catalog.find((m) => m.id === selectedModel)) {
         throw new Error(`Requested model not found in BANKR catalog: ${selectedModel}`);
@@ -281,8 +383,12 @@ export function startServer(options: StartServerOptions = {}) {
           maxOutputTokens: body?.max_tokens ?? body?.max_completion_tokens ?? 1024,
           profile: requested.profile ?? "auto",
           hasVision: hasVision(messages),
-          hasTools: hasTools(body),
+          hasTools: toolsDetected,
           catalog,
+          config: routerConfig ?? DEFAULT_BANKR_ROUTING_CONFIG,
+          inheritedTier,
+          inheritedConfidence,
+          structuredOutput,
         });
 
         selectedModel = routeDecision.model;
@@ -292,41 +398,278 @@ export function startServer(options: StartServerOptions = {}) {
         throw new Error("No model selected");
       }
 
-      if (url.pathname === "/v1/route") {
-        return json(res, 200, {
-          requestedModel: body?.model ?? "auto",
-          selectedModel,
-          ...(routeDecision ?? {}),
-        });
+      plannedModel = selectedModel;
+
+      const headers: Record<string, string> = {
+        "x-router-planned-model": plannedModel,
+        "x-router-selected-model": plannedModel,
+        "x-router-tier": routeDecision?.tier ?? "",
+        "x-router-confidence": String(routeDecision?.confidence ?? ""),
+      };
+
+      if (routeDecision?.inheritedFromTier) {
+        headers["x-router-inherited-tier"] = String(routeDecision.inheritedFromTier);
       }
 
-      const headers = buildUpstreamHeaders(
+      if (url.pathname === "/v1/route") {
+        const { model: _plannedFromDecision, ...decisionPayload } = routeDecision ?? {};
+        return json(
+          res,
+          200,
+          {
+            requestedModel: body?.model ?? "auto",
+            plannedModel,
+            ...decisionPayload,
+          },
+          headers
+        );
+      }
+
+      const headersUpstream = buildUpstreamHeaders(
         req,
         loaded.catalog.bankrProviderApiKey,
         process.env.BANKR_LLM_KEY,
       );
 
-      const upstreamBody = { ...body, model: selectedModel };
+      const upstreamBody = { ...body, model: plannedModel };
 
-      const upstreamRes = await fetch(`${BANKR_UPSTREAM_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(upstreamBody),
+      const retriesConfig = routerConfig?.retries ?? DEFAULT_BANKR_ROUTING_CONFIG.retries;
+      const maxAttempts = retriesConfig?.enabled ? retriesConfig.maxAttempts : 1;
+      const retryOnStatuses = retriesConfig?.retryOnStatuses ?? [];
+      const upstreamTimeout = serverConfig?.upstreamTimeoutMs ?? 60000;
+
+      const chain = routeDecision?.chain ?? [plannedModel];
+      let attempt = 0;
+      let lastResponse: Response | null = null;
+      let responseText = "";
+      let lastStatus: number | null = null;
+      let finalModel: string | null = null;
+      let upstreamModel: string | null = null;
+      const attemptedModels: string[] = [];
+      const attemptStatuses: Array<number | null> = [];
+      let abortSource: string | null = null;
+      let abortedByClient = false;
+
+      const startAt = Date.now();
+
+      req.on("aborted", () => {
+        abortedByClient = true;
+        abortSource = abortSource ?? "client_disconnected";
       });
 
-      const responseText = await upstreamRes.text();
+      while (attempt < maxAttempts && attempt < chain.length) {
+        const modelToTry = chain[attempt] ?? plannedModel;
+        attemptedModels.push(modelToTry);
+        const attemptBody = { ...upstreamBody, model: modelToTry };
+        const controller = new AbortController();
+        const timeout = setTimeout(() => {
+          abortSource = abortSource ?? "request_timeout";
+          controller.abort();
+        }, upstreamTimeout);
 
-      res.writeHead(upstreamRes.status, {
+        try {
+          lastResponse = await fetch(`${BANKR_UPSTREAM_BASE_URL}/chat/completions`, {
+            method: "POST",
+            headers: headersUpstream,
+            body: JSON.stringify(attemptBody),
+            signal: controller.signal,
+          });
+
+          lastStatus = lastResponse.status;
+          attemptStatuses.push(lastStatus);
+
+          if (lastStatus && lastStatus < 400) {
+            finalModel = modelToTry;
+          }
+
+          if (body?.stream) {
+            if (lastStatus && lastStatus < 400) {
+              break;
+            }
+          } else {
+            responseText = await lastResponse.text();
+            if (lastStatus && lastStatus < 400) {
+              try {
+                const parsed = JSON.parse(responseText);
+                if (parsed?.model) {
+                  upstreamModel = String(parsed.model);
+                }
+              } catch {
+                // ignore parse errors
+              }
+              break;
+            }
+          }
+        } catch (err: any) {
+          if (err?.name === "AbortError") {
+            abortSource = abortSource ?? "upstream_fetch_aborted";
+          }
+          lastStatus = 0;
+          attemptStatuses.push(0);
+          responseText = "";
+        } finally {
+          clearTimeout(timeout);
+        }
+
+        if (!shouldRetry(lastStatus, retryOnStatuses)) {
+          break;
+        }
+
+        attempt += 1;
+      }
+
+      const latencyMs = Date.now() - startAt;
+
+      const finalStatus = lastStatus ?? 502;
+      const retried = Math.max(0, attempt);
+      if (retried > 0) {
+        headers["x-router-retries"] = String(retried);
+      }
+
+      const attemptsHeader = attemptedModels.length ? attemptedModels.join(",") : plannedModel;
+      const finalResolvedModel = finalModel ?? attemptedModels[attemptedModels.length - 1] ?? plannedModel;
+
+      headers["x-router-final-model"] = finalResolvedModel ?? "";
+      headers["x-router-attempts"] = String(attemptedModels.length || 1);
+      headers["x-router-attempted-models"] = attemptsHeader ?? "";
+
+      if (!body?.stream && responseText) {
+        try {
+          const parsed = JSON.parse(responseText);
+          if (parsed?.model) {
+            upstreamModel = String(parsed.model);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+
+      if (upstreamModel) {
+        headers["x-router-upstream-model"] = upstreamModel;
+      }
+
+      // keep x-router-selected-model aligned with final model (legacy header)
+      headers["x-router-selected-model"] = finalResolvedModel ?? "";
+
+      res.writeHead(finalStatus, {
         "content-type":
-          upstreamRes.headers.get("content-type") || "application/json; charset=utf-8",
-        "x-router-selected-model": selectedModel,
+          lastResponse?.headers.get("content-type") || "application/json; charset=utf-8",
+        ...headers,
       });
 
-      res.end(responseText);
+      if (body?.stream) {
+        if (lastResponse?.body) {
+          lastResponse.body.pipeTo(
+            new WritableStream({
+              write(chunk) {
+                res.write(chunk);
+              },
+              close() {
+                res.end();
+              },
+              abort() {
+                abortSource = abortSource ?? "stream_cancelled";
+                res.end();
+              },
+            })
+          );
+        } else {
+          res.end();
+        }
+      } else {
+        res.end(responseText || "");
+      }
+
+      recordRequest({
+        ts: Date.now(),
+        selectedModel: finalResolvedModel ?? plannedModel,
+        plannedModel: plannedModel ?? undefined,
+        finalModel: finalResolvedModel ?? undefined,
+        upstreamModel: upstreamModel ?? undefined,
+        tier: routeDecision?.tier ?? null,
+        confidence: routeDecision?.confidence ?? 0,
+        latencyMs,
+        status: finalStatus,
+        retried,
+        inherited: Boolean(routeDecision?.inherited),
+        toolsDetected,
+        structuredOutput,
+        codeHeavy: routeDecision?.codeHeavy ?? false,
+        success: finalStatus < 400,
+        statusCode: finalStatus,
+      });
+
+      let severity: "info" | "warn" | "error" = "info";
+      if (finalStatus >= 200 && finalStatus < 300) {
+        severity = "info";
+      } else if (finalStatus >= 400 && finalStatus < 500) {
+        severity = shouldRetry(finalStatus, retryOnStatuses) ? "warn" : "error";
+      } else if (finalStatus >= 500) {
+        severity = "error";
+      }
+
+      if (abortedByClient && finalStatus < 400) {
+        severity = "warn";
+      }
+
+      logRequest(
+        {
+          ts: new Date().toISOString(),
+          plannedModel: plannedModel ?? undefined,
+          finalModel: finalResolvedModel ?? undefined,
+          upstreamModel: upstreamModel ?? undefined,
+          tier: routeDecision?.tier ?? null,
+          confidence: routeDecision?.confidence ?? null,
+          retryCount: retried,
+          statusCode: finalStatus,
+          latencyMs,
+          toolsDetected,
+          structuredOutput,
+          codeHeavy: routeDecision?.codeHeavy ?? false,
+          promptHash: hashPrompt(prompt),
+          abortSource,
+        },
+        severity
+      );
+
+      // Reliability: record each attempted model once
+      attemptedModels.forEach((modelId, index) => {
+        const status = attemptStatuses[index] ?? finalStatus;
+        if (status != null && status < 400) {
+          recordSuccess(modelId, latencyMs, toolsDetected, structuredOutput);
+        } else {
+          recordError(modelId, status ?? 502);
+        }
+      });
+
+      if (routeDecision?.tier) {
+        setConversationState(sessionId, {
+          lastTier: routeDecision.tier,
+          lastConfidence: routeDecision.confidence ?? 0,
+          lastSelectedModel: selectedModel,
+          lastUpdatedAt: Date.now(),
+        });
+      }
     } catch (error) {
+      let abortSource: string | null = null;
+      if (error && typeof error === "object") {
+        const errName = (error as any).name;
+        if (errName === "AbortError") {
+          abortSource = "openclaw_cancellation";
+        }
+      }
+
       if (isConfigNotFoundError(error) || error instanceof OpenclawConfigNotFoundError) {
         const attemptedPaths =
           error instanceof OpenclawConfigNotFoundError ? error.attemptedPaths : [];
+        logRequest(
+          {
+            ts: new Date().toISOString(),
+            statusCode: 500,
+            abortSource,
+          },
+          "error"
+        );
         return json(res, 500, buildConfigNotFoundError(attemptedPaths));
       }
 
@@ -334,10 +677,26 @@ export function startServer(options: StartServerOptions = {}) {
       const resolvedPath = configPath ?? "(auto-discovery)";
       if (error instanceof Error) {
         const response = buildCatalogLoadError(error, providerId, resolvedPath);
+        logRequest(
+          {
+            ts: new Date().toISOString(),
+            statusCode: 500,
+            abortSource,
+          },
+          "error"
+        );
         return json(res, 500, response);
       }
 
       const message = error instanceof Error ? error.message : String(error);
+      logRequest(
+        {
+          ts: new Date().toISOString(),
+          statusCode: 500,
+          abortSource,
+        },
+        "error"
+      );
       json(res, 500, { error: "router_error", message });
     }
   });

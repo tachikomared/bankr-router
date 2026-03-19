@@ -20,17 +20,43 @@ export function loadBankrCatalogFromOpenClaw(openclawPath, providerId = "bankr")
         models,
     };
 }
-export function loadBankrCatalogWithDiscovery(options) {
+const CATALOG_CACHE_TTL_MS = 5000;
+const catalogCache = new Map();
+function getCacheKey(openclawPath, providerId) {
+    return `${openclawPath}::${providerId}`;
+}
+export function loadBankrCatalogCachedWithDiscovery(options) {
     const { selectedPath, attemptedPaths } = requireOpenclawConfigPath({
         explicitPath: options.openclawConfigPath ?? null,
         cwd: options.cwd,
     });
     const providerId = options.providerId ?? "bankr";
-    return {
+    const cacheKey = getCacheKey(selectedPath, providerId);
+    let statMtime = 0;
+    try {
+        statMtime = fs.statSync(selectedPath).mtimeMs;
+    }
+    catch {
+        statMtime = 0;
+    }
+    const existing = catalogCache.get(cacheKey);
+    const now = Date.now();
+    if (existing &&
+        now - existing.loadedAt < CATALOG_CACHE_TTL_MS &&
+        existing.mtimeMs === statMtime) {
+        return existing.result;
+    }
+    const result = {
         catalog: loadBankrCatalogFromOpenClaw(selectedPath, providerId),
         openclawConfigPath: selectedPath,
         attemptedPaths,
     };
+    catalogCache.set(cacheKey, {
+        loadedAt: now,
+        mtimeMs: statMtime,
+        result,
+    });
+    return result;
 }
 export function isConfigNotFoundError(err) {
     return err instanceof OpenclawConfigNotFoundError;

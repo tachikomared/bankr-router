@@ -67,6 +67,25 @@ export type RoutingConfig = {
   ecoTiers?: Record<Tier, TierConfig>;
   premiumTiers?: Record<Tier, TierConfig>;
   agenticTiers?: Record<Tier, TierConfig>;
+
+  followup?: {
+    enabled: boolean;
+    maxAgeMs: number;
+    shortPromptMaxChars: number;
+    inheritConfidenceFloor: number;
+  };
+
+  retries?: {
+    enabled: boolean;
+    maxAttempts: number;
+    retryOnStatuses: number[];
+  };
+
+  server?: {
+    authToken?: string;
+    rateLimitPerMinute?: number;
+    upstreamTimeoutMs?: number;
+  };
 };
 
 export type DimensionScore = {
@@ -87,18 +106,63 @@ export type ScoringResult = {
 export type RankedCandidate = {
   id: string;
   estimatedCost: number;
+  rankingScore?: number;
 };
 
 export type RoutingDecision = {
   model: string;
+  plannedModel?: string;
   tier: Tier;
   confidence: number;
-  method: "rules";
-  reasoning: string;
-  costEstimate: number;
-  baselineCost: number;
-  savings: number;
-  agenticScore?: number;
   chain: string[];
   ranked: RankedCandidate[];
+  inherited?: boolean;
+  inheritedFromTier?: Tier | null;
+  method?: "rules";
+  reasoning?: string;
+  costEstimate?: number;
+  baselineCost?: number;
+  savings?: number;
+  agenticScore?: number;
+  toolsDetected?: boolean;
+  structuredOutput?: boolean;
+  codeHeavy?: boolean;
+};
+
+export type ConversationState = {
+  lastTier: Tier | null;
+  lastConfidence: number;
+  lastUpdatedAt: number;
+  lastSelectedModel?: string;
+};
+
+export type RequestStat = {
+  ts: number;
+  selectedModel: string;
+  plannedModel?: string;
+  finalModel?: string;
+  upstreamModel?: string;
+  tier: Tier | null;
+  confidence: number;
+  latencyMs: number;
+  status: number;
+  retried: number;
+  inherited: boolean;
+  toolsDetected?: boolean;
+  structuredOutput?: boolean;
+  codeHeavy?: boolean;
+  success?: boolean;
+  statusCode?: number;
+};
+
+export type ModelReliability = {
+  successCount: number;
+  errorCount: number;
+  timeoutCount: number;
+  rateLimitCount: number;
+  totalRequests: number;
+  avgLatencyMs: number;
+  toolSuccessCount: number;
+  structuredSuccessCount: number;
+  lastUpdatedAt: number;
 };
