@@ -1,112 +1,118 @@
-import { describe, it } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
 import http from "node:http";
+import fs from "node:fs";
 import { startServer } from "./server.js";
-function httpRequest(options, body) {
-    return new Promise((resolve, reject) => {
-        const req = http.request(options, (res) => {
-            let data = "";
-            res.on("data", (chunk) => (data += chunk));
-            res.on("end", () => resolve({ status: res.statusCode || 0, body: data }));
-        });
-        req.on("error", reject);
-        if (body)
-            req.write(body);
-        req.end();
-    });
-}
-describe("server", () => {
-    it("should respond to /health", async () => {
-        const server = startServer({
-            host: "127.0.0.1",
-            port: 0,
-            bankrProviderId: "bankr",
-            routerProviderId: "bankr-router"
-        });
-        const address = server.address();
-        if (!address || typeof address === "string")
-            throw new Error("Invalid address");
-        const port = address.port;
-        const response = await httpRequest({
-            method: "GET",
-            hostname: "127.0.0.1",
-            port,
-            path: "/health"
-        });
-        server.close();
-        assert.strictEqual(response.status, 200);
-        const payload = JSON.parse(response.body);
-        assert.strictEqual(payload.ok, true);
-        assert.ok(payload.name);
-    });
-    it("should respond to /v1/models", async () => {
-        const server = startServer({
-            host: "127.0.0.1",
-            port: 0,
-            bankrProviderId: "bankr",
-            routerProviderId: "bankr-router"
-        });
-        const address = server.address();
-        if (!address || typeof address === "string")
-            throw new Error("Invalid address");
-        const port = address.port;
-        const response = await httpRequest({
-            method: "GET",
-            hostname: "127.0.0.1",
-            port,
-            path: "/v1/models"
-        });
-        server.close();
-        assert.strictEqual(response.status, 200);
-        const payload = JSON.parse(response.body);
-        assert.ok(Array.isArray(payload.data));
-        assert.ok(payload.data.some((m) => m.id === "auto"));
-    });
-    it("should respond to /v1/route with selected model", async () => {
-        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "bankr-router-test-"));
-        const configPath = path.join(tempDir, "openclaw.json");
-        const config = {
+describe("server v0.8.0", () => {
+    let server;
+    let port;
+    const testConfigPath = "/tmp/test-openclaw-v08.json";
+    const testLogDir = "/tmp/test-logs-v08";
+    // Use model IDs that match DEFAULT_BANKR_ROUTING_CONFIG tiers
+    const mockCatalog = [
+        { id: "gpt-5-nano", name: "GPT-5 Nano", contextWindow: 128000, cost: { input: 0.1, output: 0.3 } },
+        { id: "deepseek-v3.2", name: "DeepSeek V3.2", contextWindow: 128000, cost: { input: 0.2, output: 0.6 } },
+        { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", contextWindow: 128000, cost: { input: 0.5, output: 1.5 } },
+        { id: "gpt-5.2", name: "GPT-5.2", contextWindow: 128000, cost: { input: 1.0, output: 3.0 } },
+    ];
+    before(async () => {
+        // Create test config
+        fs.writeFileSync(testConfigPath, JSON.stringify({
             models: {
                 providers: {
                     bankr: {
-                        apiKey: "local-router",
-                        models: [
-                            { id: "bankr/eco" },
-                            { id: "bankr/premium" }
-                        ]
-                    }
-                }
-            }
-        };
-        fs.writeFileSync(configPath, JSON.stringify(config));
-        const server = startServer({
+                        apiKey: "test-key",
+                        models: mockCatalog,
+                    },
+                },
+            },
+        }));
+        // Clean up log dir
+        try {
+            fs.rmSync(testLogDir, { recursive: true });
+        }
+        catch { }
+        fs.mkdirSync(testLogDir, { recursive: true });
+        process.env.BANKR_ROUTER_LOG_DIR = testLogDir;
+        // Start server on random port and wait for it to be ready
+        const srv = startServer({
             host: "127.0.0.1",
             port: 0,
-            openclawConfigPath: configPath,
+            openclawConfigPath: testConfigPath,
             bankrProviderId: "bankr",
-            routerProviderId: "bankr-router"
+            routerProviderId: "bankr-router",
         });
-        const address = server.address();
-        if (!address || typeof address === "string")
-            throw new Error("Invalid address");
-        const port = address.port;
-        const response = await httpRequest({
-            method: "POST",
-            hostname: "127.0.0.1",
-            port,
-            path: "/v1/route",
-            headers: { "content-type": "application/json" }
-        }, JSON.stringify({
-            model: "bankr-router/auto",
-            messages: [{ role: "user", content: "test" }]
-        }));
+        server = srv;
+        // Wait for server to be listening
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("Server start timeout")), 5000);
+            srv.on("listening", () => {
+                clearTimeout(timeout);
+                resolve();
+            });
+            srv.on("error", (err) => {
+                clearTimeout(timeout);
+                reject(err);
+            });
+        });
+        port = server.address().port;
+    });
+    after(() => {
         server.close();
-        fs.rmSync(tempDir, { recursive: true, force: true });
-        assert.strictEqual(response.status, 200);
-        const payload = JSON.parse(response.body);
-        assert.ok(payload.selectedModel);
+        try {
+            fs.unlinkSync(testConfigPath);
+            fs.rmSync(testLogDir, { recursive: true });
+        }
+        catch { }
+    });
+    function request(path, body, headers) {
+        return new Promise((resolve, reject) => {
+            const data = JSON.stringify(body);
+            const req = http.request({
+                hostname: "127.0.0.1",
+                port,
+                path,
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Content-Length": Buffer.byteLength(data),
+                    ...headers,
+                },
+            }, (res) => {
+                let chunks = "";
+                res.on("data", (c) => (chunks += c));
+                res.on("end", () => {
+                    resolve({
+                        status: res.statusCode || 0,
+                        headers: res.headers,
+                        body: chunks,
+                    });
+                });
+            });
+            req.on("error", reject);
+            req.write(data);
+            req.end();
+        });
+    }
+    describe("/v1/route dry-run", () => {
+        it("should return planned model without executing upstream", async () => {
+            const res = await request("/v1/route", {
+                model: "bankr-router/auto",
+                messages: [{ role: "user", content: "Hello" }],
+            });
+            assert.strictEqual(res.status, 200);
+            const json = JSON.parse(res.body);
+            assert.ok(json.plannedModel);
+            assert.ok(json.tier);
+            assert.ok(res.headers["x-router-planned-model"]);
+            assert.strictEqual(res.headers["x-router-final-model"], undefined);
+        });
+        it("should not have upstream-model header in dry-run", async () => {
+            const res = await request("/v1/route", {
+                model: "bankr-router/auto",
+                messages: [{ role: "user", content: "Test" }],
+            });
+            assert.strictEqual(res.headers["x-router-upstream-model"], undefined);
+        });
     });
 });

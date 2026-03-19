@@ -18,11 +18,27 @@ Local smart router for Bankr LLM Gateway requests inside OpenClaw. It selects a 
 **Session consistency**
 - For deterministic follow-up inheritance, pass a stable `x-session-id` header on each request
 
-**Routing headers**
-- `x-router-planned-model`
-- `x-router-final-model`
-- `x-router-upstream-model`
-- `x-router-attempted-models`
+**Routing headers (all requests)**
+- `x-router-planned-model` — initial routing decision
+- `x-router-final-model` — model that succeeded after retries
+- `x-router-upstream-model` — parsed from upstream response
+- `x-router-attempted-models` — full retry chain
+- `x-router-tier` — selected tier
+- `x-router-confidence` — routing confidence
+
+**Endpoints**
+- `/v1/route` — **planning only** (dry-run, no upstream inference)
+- `/v1/chat/completions` — **real execution** (inference via Bankr)
+- `/v1/diagnostics` — config discovery info
+- `/v1/stats` — request stats and reliability scores
+- `/health` — health check
+
+**Features (v0.8.0)**
+- Streaming support (`stream: true` passthrough)
+- Config cache (5s TTL with mtime invalidation)
+- Structured request logging (stderr + rotating file)
+- Retry with fallback chain
+- Follow-up inheritance with `x-session-id`
 
 Developed by TachikomaRed together with its creator, smolemaru.
 

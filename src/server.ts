@@ -1,7 +1,7 @@
 import http, { IncomingMessage, ServerResponse } from "node:http";
 import {
   buildCatalogLoadError,
-  loadBankrCatalogWithDiscovery,
+  loadBankrCatalogCachedWithDiscovery,
   isConfigNotFoundError,
 } from "./catalog.js";
 import { routeBankrRequest } from "./router/selector.js";
@@ -20,6 +20,7 @@ import {
 } from "./context.js";
 import { getHealthSummary, getStats, recordRequest } from "./stats.js";
 import { recordSuccess, recordError } from "./reliability.js";
+import { hashPrompt, logRequest } from "./logging.js";
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const BANKR_UPSTREAM_BASE_URL = "https://llm.bankr.bot/v1";
@@ -313,7 +314,7 @@ export function startServer(options: StartServerOptions = {}) {
         explicitPath: configPath ?? null,
       });
 
-      const loaded = loadBankrCatalogWithDiscovery({
+      const loaded = loadBankrCatalogCachedWithDiscovery({
         openclawConfigPath: selectedPath,
         providerId: bankrProviderId,
       });
@@ -456,10 +457,6 @@ export function startServer(options: StartServerOptions = {}) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), upstreamTimeout);
 
-        console.error(
-          `[bankr-router] requested=${body?.model ?? "auto"} selected=${modelToTry} prompt=${prompt.slice(0, 120).replace(/\s+/g, " ")}`
-        );
-
         try {
           lastResponse = await fetch(`${BANKR_UPSTREAM_BASE_URL}/chat/completions`, {
             method: "POST",
@@ -468,22 +465,32 @@ export function startServer(options: StartServerOptions = {}) {
             signal: controller.signal,
           });
 
-          responseText = await lastResponse.text();
           lastStatus = lastResponse.status;
           attemptStatuses.push(lastStatus);
 
           if (lastStatus && lastStatus < 400) {
             finalModel = modelToTry;
-            try {
-              const parsed = JSON.parse(responseText);
-              if (parsed?.model) {
-                upstreamModel = String(parsed.model);
+          }
+
+          if (body?.stream) {
+            if (lastStatus && lastStatus < 400) {
+              break;
+            }
+          } else {
+            responseText = await lastResponse.text();
+            if (lastStatus && lastStatus < 400) {
+              try {
+                const parsed = JSON.parse(responseText);
+                if (parsed?.model) {
+                  upstreamModel = String(parsed.model);
+                }
+              } catch {
+                // ignore parse errors
               }
-            } catch (err) {
-              // ignore parse errors
+              break;
             }
           }
-        } catch (err) {
+        } catch {
           lastStatus = 0;
           attemptStatuses.push(0);
           responseText = "";
@@ -495,7 +502,6 @@ export function startServer(options: StartServerOptions = {}) {
           break;
         }
 
-        console.error(`[bankr-router] retry=${attempt + 1} next=${chain[attempt + 1] ?? "none"}`);
         attempt += 1;
       }
 
@@ -513,6 +519,18 @@ export function startServer(options: StartServerOptions = {}) {
       headers["x-router-final-model"] = finalResolvedModel ?? "";
       headers["x-router-attempts"] = String(attemptedModels.length || 1);
       headers["x-router-attempted-models"] = attemptsHeader ?? "";
+
+      if (!body?.stream && responseText) {
+        try {
+          const parsed = JSON.parse(responseText);
+          if (parsed?.model) {
+            upstreamModel = String(parsed.model);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+
       if (upstreamModel) {
         headers["x-router-upstream-model"] = upstreamModel;
       }
@@ -526,7 +544,27 @@ export function startServer(options: StartServerOptions = {}) {
         ...headers,
       });
 
-      res.end(responseText || "");
+      if (body?.stream) {
+        if (lastResponse?.body) {
+          lastResponse.body.pipeTo(
+            new WritableStream({
+              write(chunk) {
+                res.write(chunk);
+              },
+              close() {
+                res.end();
+              },
+              abort() {
+                res.end();
+              },
+            })
+          );
+        } else {
+          res.end();
+        }
+      } else {
+        res.end(responseText || "");
+      }
 
       recordRequest({
         ts: Date.now(),
@@ -545,6 +583,22 @@ export function startServer(options: StartServerOptions = {}) {
         codeHeavy: routeDecision?.codeHeavy ?? false,
         success: finalStatus < 400,
         statusCode: finalStatus,
+      });
+
+      logRequest({
+        ts: new Date().toISOString(),
+        plannedModel: plannedModel ?? undefined,
+        finalModel: finalResolvedModel ?? undefined,
+        upstreamModel: upstreamModel ?? undefined,
+        tier: routeDecision?.tier ?? null,
+        confidence: routeDecision?.confidence ?? null,
+        retryCount: retried,
+        statusCode: finalStatus,
+        latencyMs,
+        toolsDetected,
+        structuredOutput,
+        codeHeavy: routeDecision?.codeHeavy ?? false,
+        promptHash: hashPrompt(prompt),
       });
 
       // Reliability: record each attempted model once

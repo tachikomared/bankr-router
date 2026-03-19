@@ -1,11 +1,12 @@
 import http from "node:http";
-import { buildCatalogLoadError, loadBankrCatalogWithDiscovery, isConfigNotFoundError, } from "./catalog.js";
+import { buildCatalogLoadError, loadBankrCatalogCachedWithDiscovery, isConfigNotFoundError, } from "./catalog.js";
 import { routeBankrRequest } from "./router/selector.js";
 import { DEFAULT_BANKR_ROUTING_CONFIG } from "./router/config.js";
 import { resolveOpenclawConfigPath, requireOpenclawConfigPath, OpenclawConfigNotFoundError, } from "./config-path.js";
 import { getConversationState, getSessionId, isFollowupPrompt, setConversationState, } from "./context.js";
 import { getHealthSummary, getStats, recordRequest } from "./stats.js";
 import { recordSuccess, recordError } from "./reliability.js";
+import { hashPrompt, logRequest } from "./logging.js";
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const BANKR_UPSTREAM_BASE_URL = "https://llm.bankr.bot/v1";
 const DEBUG_ENABLED = process.env.BANKR_ROUTER_DEBUG === "1";
@@ -235,7 +236,7 @@ export function startServer(options = {}) {
             const { selectedPath } = requireOpenclawConfigPath({
                 explicitPath: configPath ?? null,
             });
-            const loaded = loadBankrCatalogWithDiscovery({
+            const loaded = loadBankrCatalogCachedWithDiscovery({
                 openclawConfigPath: selectedPath,
                 providerId: bankrProviderId,
             });
@@ -345,7 +346,6 @@ export function startServer(options = {}) {
                 const attemptBody = { ...upstreamBody, model: modelToTry };
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), upstreamTimeout);
-                console.error(`[bankr-router] requested=${body?.model ?? "auto"} selected=${modelToTry} prompt=${prompt.slice(0, 120).replace(/\s+/g, " ")}`);
                 try {
                     lastResponse = await fetch(`${BANKR_UPSTREAM_BASE_URL}/chat/completions`, {
                         method: "POST",
@@ -353,23 +353,33 @@ export function startServer(options = {}) {
                         body: JSON.stringify(attemptBody),
                         signal: controller.signal,
                     });
-                    responseText = await lastResponse.text();
                     lastStatus = lastResponse.status;
                     attemptStatuses.push(lastStatus);
                     if (lastStatus && lastStatus < 400) {
                         finalModel = modelToTry;
-                        try {
-                            const parsed = JSON.parse(responseText);
-                            if (parsed?.model) {
-                                upstreamModel = String(parsed.model);
-                            }
+                    }
+                    if (body?.stream) {
+                        if (lastStatus && lastStatus < 400) {
+                            break;
                         }
-                        catch (err) {
-                            // ignore parse errors
+                    }
+                    else {
+                        responseText = await lastResponse.text();
+                        if (lastStatus && lastStatus < 400) {
+                            try {
+                                const parsed = JSON.parse(responseText);
+                                if (parsed?.model) {
+                                    upstreamModel = String(parsed.model);
+                                }
+                            }
+                            catch {
+                                // ignore parse errors
+                            }
+                            break;
                         }
                     }
                 }
-                catch (err) {
+                catch {
                     lastStatus = 0;
                     attemptStatuses.push(0);
                     responseText = "";
@@ -380,7 +390,6 @@ export function startServer(options = {}) {
                 if (!shouldRetry(lastStatus, retryOnStatuses)) {
                     break;
                 }
-                console.error(`[bankr-router] retry=${attempt + 1} next=${chain[attempt + 1] ?? "none"}`);
                 attempt += 1;
             }
             const latencyMs = Date.now() - startAt;
@@ -394,6 +403,17 @@ export function startServer(options = {}) {
             headers["x-router-final-model"] = finalResolvedModel ?? "";
             headers["x-router-attempts"] = String(attemptedModels.length || 1);
             headers["x-router-attempted-models"] = attemptsHeader ?? "";
+            if (!body?.stream && responseText) {
+                try {
+                    const parsed = JSON.parse(responseText);
+                    if (parsed?.model) {
+                        upstreamModel = String(parsed.model);
+                    }
+                }
+                catch {
+                    // ignore parse errors
+                }
+            }
             if (upstreamModel) {
                 headers["x-router-upstream-model"] = upstreamModel;
             }
@@ -403,7 +423,27 @@ export function startServer(options = {}) {
                 "content-type": lastResponse?.headers.get("content-type") || "application/json; charset=utf-8",
                 ...headers,
             });
-            res.end(responseText || "");
+            if (body?.stream) {
+                if (lastResponse?.body) {
+                    lastResponse.body.pipeTo(new WritableStream({
+                        write(chunk) {
+                            res.write(chunk);
+                        },
+                        close() {
+                            res.end();
+                        },
+                        abort() {
+                            res.end();
+                        },
+                    }));
+                }
+                else {
+                    res.end();
+                }
+            }
+            else {
+                res.end(responseText || "");
+            }
             recordRequest({
                 ts: Date.now(),
                 selectedModel: finalResolvedModel ?? plannedModel,
@@ -421,6 +461,21 @@ export function startServer(options = {}) {
                 codeHeavy: routeDecision?.codeHeavy ?? false,
                 success: finalStatus < 400,
                 statusCode: finalStatus,
+            });
+            logRequest({
+                ts: new Date().toISOString(),
+                plannedModel: plannedModel ?? undefined,
+                finalModel: finalResolvedModel ?? undefined,
+                upstreamModel: upstreamModel ?? undefined,
+                tier: routeDecision?.tier ?? null,
+                confidence: routeDecision?.confidence ?? null,
+                retryCount: retried,
+                statusCode: finalStatus,
+                latencyMs,
+                toolsDetected,
+                structuredOutput,
+                codeHeavy: routeDecision?.codeHeavy ?? false,
+                promptHash: hashPrompt(prompt),
             });
             // Reliability: record each attempted model once
             attemptedModels.forEach((modelId, index) => {
