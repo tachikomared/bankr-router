@@ -1,4 +1,4 @@
-import { describe, it, before, after } from "node:test";
+import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert";
 import http from "node:http";
 import fs from "node:fs";
@@ -6,6 +6,7 @@ import { startServer } from "./server.js";
 describe("server v0.8.0", () => {
     let server;
     let port;
+    const originalFetch = globalThis.fetch;
     const testConfigPath = "/tmp/test-openclaw-v08.json";
     const testLogDir = "/tmp/test-logs-v08";
     // Use model IDs that match DEFAULT_BANKR_ROUTING_CONFIG tiers
@@ -37,6 +38,9 @@ describe("server v0.8.0", () => {
         { id: "kimi-k2.5", name: "Kimi K2.5", contextWindow: 128000, cost: { input: 0.35, output: 1.05 } },
         { id: "minimax-m2.5", name: "MiniMax M2.5", contextWindow: 128000, cost: { input: 0.3, output: 0.9 } },
     ];
+    beforeEach(() => {
+        globalThis.fetch = originalFetch;
+    });
     before(async () => {
         // Create test config
         fs.writeFileSync(testConfigPath, JSON.stringify({
@@ -80,6 +84,7 @@ describe("server v0.8.0", () => {
         port = server.address().port;
     });
     after(() => {
+        globalThis.fetch = originalFetch;
         server.close();
         try {
             fs.unlinkSync(testConfigPath);
@@ -135,6 +140,39 @@ describe("server v0.8.0", () => {
                 messages: [{ role: "user", content: "Test" }],
             });
             assert.strictEqual(res.headers["x-router-upstream-model"], undefined);
+        });
+    });
+    describe("planned-model invariants", () => {
+        it("no-retry request => planned == attempted[0] == final", async () => {
+            globalThis.fetch = (async () => new Response(JSON.stringify({ id: "cmpl-1", object: "chat.completion", model: "gpt-5.4-nano", choices: [] }), { status: 200, headers: { "content-type": "application/json" } }));
+            const res = await request("/v1/chat/completions", {
+                model: "bankr-router/auto",
+                messages: [{ role: "user", content: "hello" }],
+            });
+            assert.strictEqual(res.status, 200);
+            assert.strictEqual(res.headers["x-router-attempts"], "1");
+            assert.strictEqual(res.headers["x-router-planned-model"], res.headers["x-router-final-model"]);
+            assert.strictEqual(res.headers["x-router-planned-model"], String(res.headers["x-router-attempted-models"]).split(",")[0]);
+        });
+        it("retry request => planned == attempted[0], final may differ", async () => {
+            let call = 0;
+            globalThis.fetch = (async (_url, init) => {
+                call += 1;
+                const reqBody = JSON.parse(String(init.body));
+                if (call === 1) {
+                    return new Response(JSON.stringify({ error: "rate_limited" }), { status: 429, headers: { "content-type": "application/json" } });
+                }
+                return new Response(JSON.stringify({ id: "cmpl-2", object: "chat.completion", model: reqBody.model, choices: [] }), { status: 200, headers: { "content-type": "application/json" } });
+            });
+            const res = await request("/v1/chat/completions", {
+                model: "bankr-router/auto",
+                messages: [{ role: "user", content: "function test() { return 1 }\nplease debug this code" }],
+            });
+            assert.strictEqual(res.status, 200);
+            const attempted = String(res.headers["x-router-attempted-models"]).split(",");
+            assert.ok(attempted.length >= 2);
+            assert.strictEqual(res.headers["x-router-planned-model"], attempted[0]);
+            assert.strictEqual(res.headers["x-router-final-model"], attempted[attempted.length - 1]);
         });
     });
 });

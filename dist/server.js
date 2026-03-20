@@ -282,6 +282,7 @@ export function startServer(options = {}) {
             let selectedModel = requested.explicitModel;
             let plannedModel = null;
             let routeDecision = null;
+            let executionChain = [];
             const toolsDetected = hasTools(body);
             const structuredOutput = isStructuredOutput(body);
             if (selectedModel && !catalog.find((m) => m.id === selectedModel)) {
@@ -302,11 +303,17 @@ export function startServer(options = {}) {
                     structuredOutput,
                 });
                 selectedModel = routeDecision.model;
+                executionChain = Array.isArray(routeDecision?.ranked)
+                    ? routeDecision.ranked.map((candidate) => candidate.id).filter(Boolean)
+                    : [];
             }
             if (!selectedModel) {
                 throw new Error("No model selected");
             }
-            plannedModel = selectedModel;
+            if (!executionChain.length) {
+                executionChain = [selectedModel];
+            }
+            plannedModel = executionChain[0] ?? selectedModel;
             const headers = {
                 "x-router-planned-model": plannedModel,
                 "x-router-selected-model": plannedModel,
@@ -330,7 +337,7 @@ export function startServer(options = {}) {
             const maxAttempts = retriesConfig?.enabled ? retriesConfig.maxAttempts : 1;
             const retryOnStatuses = retriesConfig?.retryOnStatuses ?? [];
             const upstreamTimeout = serverConfig?.upstreamTimeoutMs ?? 60000;
-            const chain = routeDecision?.chain ?? [plannedModel];
+            const chain = executionChain.length ? executionChain : (routeDecision?.chain ?? [plannedModel]);
             let attempt = 0;
             let lastResponse = null;
             let responseText = "";
