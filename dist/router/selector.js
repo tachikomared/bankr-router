@@ -203,20 +203,32 @@ function rerankForToolAndStructured(ranked, profile, tools, structured) {
             : TOOL_STRUCTURED_PRIORITY_AUTO;
     return rerankByPriority(ranked, priorityList);
 }
-function pickCheapestInChain(chain, catalog, estimatedInputTokens, maxOutputTokens, prompt, systemPrompt) {
+function pickCheapestInChain(chain, catalog, estimatedInputTokens, maxOutputTokens, prompt, systemPrompt, profile, tier) {
     const codeHeavy = looksCodeHeavy(prompt, systemPrompt);
     const ranked = chain
-        .map((id) => {
+        .map((id, index) => {
         const model = catalog.get(id);
         if (!model)
             return null;
         const rawCost = estimateModelCost(model, estimatedInputTokens, maxOutputTokens);
         const estimatedCost = Number.isFinite(rawCost) ? Math.max(0, rawCost) : Number.POSITIVE_INFINITY;
         const rankingScore = rawCost + codeAffinityBonus(id, codeHeavy);
+        const tierBias = index === 0 ? -0.5 : index * 0.01;
+        const profileBias = profile === "auto" ? -0.1 : 0;
+        const tierPreference = tier === "SIMPLE"
+            ? ["gpt-5.4-mini"]
+            : tier === "MEDIUM"
+                ? ["deepseek-v3.2"]
+                : tier === "COMPLEX"
+                    ? ["gemini-3.1-pro"]
+                    : tier === "REASONING"
+                        ? ["gpt-5.4"]
+                        : [];
+        const preferredBoost = tierPreference.includes(id) ? -1 : 0;
         return {
             id,
             estimatedCost,
-            rankingScore
+            rankingScore: rankingScore + tierBias + profileBias + preferredBoost
         };
     })
         .filter((x) => !!x && Number.isFinite(x.rankingScore ?? Number.POSITIVE_INFINITY));
@@ -263,7 +275,7 @@ export function routeBankrRequest(args) {
     chain = filterByTools(chain, hasTools, catalogMap);
     chain = filterByVision(chain, hasVision, catalogMap);
     chain = filterByContext(chain, estimatedTotalTokens, catalogMap);
-    const ranked = pickCheapestInChain(chain, catalogMap, estimatedInputTokens, maxOutputTokens, prompt, systemPrompt);
+    const ranked = pickCheapestInChain(chain, catalogMap, estimatedInputTokens, maxOutputTokens, prompt, systemPrompt, profile, tier);
     const codeHeavy = looksCodeHeavy(prompt, systemPrompt);
     let reranked = ranked;
     reranked = rerankForCodeHeavy(reranked, profile);
