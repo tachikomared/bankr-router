@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# bankr-router: Fast primary model changer for auto profile tiers
+# Usage: ./router-primaries.sh [simple|medium|complex|reasoning] [model-id]
+
+set -euo pipefail
+
+CONFIG_FILE="${HOME}/tachi/workspace/openclawbankrrouter/dist/router/config.js"
+ENV_FILE="${HOME}/tachi/workspace/openclawbankrrouter/builder/.env"
+
+usage() {
+  echo "Usage: $0 [tier] [model-id]"
+  echo ""
+  echo "Tiers: simple, medium, complex, reasoning"
+  echo "Examples:"
+  echo "  $0 simple gpt-5.4-mini"
+  echo "  $0 medium deepseek-v3.2"
+  echo "  $0 complex gemini-3.1-pro"
+  echo "  $0 reasoning gpt-5.4"
+  exit 1
+}
+
+tier="${1:-}"
+model="${2:-}"
+
+if [[ -z "$tier" || -z "$model" ]]; then
+  usage
+fi
+
+# Normalize tier name
+tier_lower=$(echo "$tier" | tr '[:upper:]' '[:lower:]')
+case "$tier_lower" in
+  simple|medium|complex|reasoning) ;;
+  *) echo "Error: tier must be one of: simple, medium, complex, reasoning"; exit 1 ;;
+esac
+
+# Escape model ID for sed
+model_escaped=$(printf '%s\n' "$model" | sed 's/[&/\]/\\&/g')
+
+# Check config file exists
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "Error: config file not found at $CONFIG_FILE"
+  echo "Please ensure bankr-router is built."
+  exit 1
+fi
+
+# Optional: Load GitHub token if available (for future automation)
+if [[ -f "$ENV_FILE" ]]; then
+  export GITHUB_TOKEN=$(grep '^GITHUB_TOKEN=' "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+  if [[ -n "$GITHUB_TOKEN" ]]; then
+    echo "✓ GitHub token loaded from $ENV_FILE"
+  fi
+fi
+
+# Backup before modification
+cp "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+
+# Update primary for the specified tier
+sed -i "s/^\(\s\+${tier_lower}: {\s*primary:\) \".*\"/\1 \"$model_escaped\"/" "$CONFIG_FILE"
+
+echo "✓ Updated ${tier_lower} primary to $model"
+echo ""
+echo "Restart gateway to apply:"
+echo "  openclaw gateway restart"
