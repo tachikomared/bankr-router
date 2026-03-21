@@ -285,20 +285,35 @@ journalctl --user -u openclaw-gateway.service -n 50 --no-pager
 
 ## Quick primary model switcher
 
-Use the helper script to change a tier primary quickly:
+Create `builder/.env` in the bankr-router repo with a GitHub token to enable `router-primaries.sh`:
+
+```bash
+# ~/.tachi/workspace/openclawbankrrouter/builder/.env
+GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+```
+
+Then change a tier's primary model instantly:
 
 ```bash
 # Example: switch auto's simple tier to GPT 5.4 Mini
-./skills/bankr-router/scripts/router\ primaries simple gpt-5.4-mini
+./skills/bankr-router/scripts/router-primaries.sh simple gpt-5.4-mini
 
 # Example: switch auto's medium tier to DeepSeek V3.2
-./skills/bankr-router/scripts/router\ primaries medium deepseek-v3.2
+./skills/bankr-router/scripts/router-primaries.sh medium deepseek-v3.2
 ```
 
 The script:
 - Backs up `dist/router/config.js` before editing
 - Updates only the specified tier's `primary`
+- Optionally loads GitHub token from `builder/.env` for future automation
 - Prompts you to restart the gateway
+
+For a fresh setup, copy the example:
+
+```bash
+cp /skills/bankr-router/references/.env.example /skills/bankr-router/builder/.env
+# edit builder/.env and add your real GITHUB_TOKEN
+```
 
 ---
 
