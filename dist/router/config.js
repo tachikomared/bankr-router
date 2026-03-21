@@ -149,7 +149,7 @@ export const DEFAULT_BANKR_ROUTING_CONFIG = {
     },
     tiers: {
         SIMPLE: {
-            primary: "gpt-5.4-mini",
+            primary: "gpt-5.4-nano",
             fallback: [
                 "qwen3.5-flash",
                 "deepseek-v3.2",
@@ -159,20 +159,21 @@ export const DEFAULT_BANKR_ROUTING_CONFIG = {
             ]
         },
         MEDIUM: {
-            primary: "deepseek-v3.2",
+            primary: "gpt-5.4-mini",
             fallback: [
+                "deepseek-v3.2",
                 "qwen3.5-plus",
                 "gemini-3.1-flash-lite",
                 "grok-4.1-fast",
                 "gpt-5-mini",
                 "gemini-3-flash",
-                "gpt-5.4-mini",
             ]
         },
         COMPLEX: {
-            primary: "gemini-3.1-pro",
+            primary: "gpt-5.4",
             fallback: [
                 "claude-sonnet-4.6",
+                "gemini-3.1-pro",
                 "gemini-3-pro",
                 "gpt-5.2",
                 "claude-sonnet-4.5",
