@@ -1400,9 +1400,9 @@ export const DEFAULT_BANKR_ROUTING_CONFIG: RoutingConfig = {
     },
 
     tierBoundaries: {
-      simpleMedium: 0.08,
-      mediumComplex: 0.30,
-      complexReasoning: 0.50
+      simpleMedium: 0.05,
+      mediumComplex: 0.15,
+      complexReasoning: 0.25
     },
 
     confidenceSteepness: 12,

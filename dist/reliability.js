@@ -1,4 +1,5 @@
 const reliabilityStore = new Map();
+const cooldownStore = new Map();
 function getOrCreate(modelId) {
     const existing = reliabilityStore.get(modelId);
     if (existing)
@@ -27,6 +28,7 @@ export function recordSuccess(modelId, latencyMs, tools, structured) {
         stats.structuredSuccessCount += 1;
     stats.lastUpdatedAt = Date.now();
     reliabilityStore.set(modelId, stats);
+    cooldownStore.delete(modelId); // Clear cooldown on success
 }
 export function recordError(modelId, status) {
     const stats = getOrCreate(modelId);
@@ -34,10 +36,27 @@ export function recordError(modelId, status) {
     stats.totalRequests += 1;
     if (status === 408 || status === 504 || status === 0)
         stats.timeoutCount += 1;
-    if (status === 429)
+    if (status === 429) {
         stats.rateLimitCount += 1;
+        // Set a 2-minute cooldown on 429s
+        cooldownStore.set(modelId, Date.now() + 120000);
+    }
+    else {
+        // Set a 30-second cooldown on other errors
+        cooldownStore.set(modelId, Date.now() + 30000);
+    }
     stats.lastUpdatedAt = Date.now();
     reliabilityStore.set(modelId, stats);
+}
+export function isModelInCooldown(modelId) {
+    const expiration = cooldownStore.get(modelId);
+    if (!expiration)
+        return false;
+    if (Date.now() > expiration) {
+        cooldownStore.delete(modelId);
+        return false;
+    }
+    return true;
 }
 export function getReliability(modelId) {
     return reliabilityStore.get(modelId);
@@ -46,6 +65,8 @@ export function getAllReliability() {
     return Object.fromEntries(reliabilityStore.entries());
 }
 export function computeReliabilityScore(modelId) {
+    if (isModelInCooldown(modelId))
+        return 0.0; // Heavily penalize models in cooldown
     const stats = getOrCreate(modelId);
     if (stats.totalRequests === 0)
         return 1.0;

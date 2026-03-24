@@ -1384,9 +1384,9 @@ export const DEFAULT_BANKR_ROUTING_CONFIG = {
             agenticTask: 0.04
         },
         tierBoundaries: {
-            simpleMedium: 0.08,
-            mediumComplex: 0.30,
-            complexReasoning: 0.50
+            simpleMedium: 0.05,
+            mediumComplex: 0.15,
+            complexReasoning: 0.25
         },
         confidenceSteepness: 12,
         confidenceThreshold: 0.7

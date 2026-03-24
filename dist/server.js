@@ -6,6 +6,9 @@ import { resolveOpenclawConfigPath, requireOpenclawConfigPath, OpenclawConfigNot
 import { getConversationState, getSessionId, isFollowupPrompt, setConversationState, } from "./context.js";
 import { getHealthSummary, getStats, recordRequest } from "./stats.js";
 import { recordSuccess, recordError } from "./reliability.js";
+import { isDegradedResponse } from "./degraded.js";
+import { checkBudget } from "./budget.js";
+const activeBudgets = new Map();
 import { hashPrompt, logRequest } from "./logging.js";
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const BANKR_UPSTREAM_BASE_URL = "https://llm.bankr.bot/v1";
@@ -356,7 +359,26 @@ export function startServer(options = {}) {
             while (attempt < maxAttempts && attempt < chain.length) {
                 const modelToTry = chain[attempt] ?? plannedModel;
                 attemptedModels.push(modelToTry);
-                const attemptBody = { ...upstreamBody, model: modelToTry };
+                const sessionId = `${(req.headers["x-session-id"]) || "default"}`;
+                let sessionBudget = activeBudgets.get(sessionId) || { spentUsd: 0, inputTokens: 0, outputTokens: 0, downgradeHappened: false };
+                // Let's assume a generic config for now (could be parsed from headers)
+                const isStrictMock = (req.headers["x-mock-budget-reject"]) === "true";
+                const budgetConfig = {
+                    budgetMode: isStrictMock ? 'strict' : 'graceful',
+                    maxCostPerRunUsd: isStrictMock ? -1 : 10
+                };
+                const budgetStatus = checkBudget(budgetConfig, sessionBudget);
+                let actualModelToTry = modelToTry;
+                if (budgetStatus === 'reject') {
+                    return new Response(JSON.stringify({ error: "budget_exceeded" }), { status: 402 });
+                }
+                else if (budgetStatus === 'downgrade') {
+                    sessionBudget.downgradeHappened = true;
+                    if (actualModelToTry === 'bankr-router/premium') {
+                        actualModelToTry = 'bankr-router/eco';
+                    }
+                }
+                const attemptBody = { ...upstreamBody, model: actualModelToTry };
                 const controller = new AbortController();
                 const timeout = setTimeout(() => {
                     abortSource = abortSource ?? "request_timeout";
@@ -381,6 +403,9 @@ export function startServer(options = {}) {
                     }
                     else {
                         responseText = await lastResponse.text();
+                        if (lastStatus === 200 && isDegradedResponse(responseText, body?.response_format?.type === "json_object" || body?.response_format?.type === "json_schema")) {
+                            lastStatus = 500; // treat as server error so it triggers retry
+                        }
                         if (lastStatus && lastStatus < 400) {
                             try {
                                 const parsed = JSON.parse(responseText);
