@@ -13,7 +13,7 @@ The agent will read the skill first, then follow the instructions in it.
 
 # bankr-router
 
-`bankr-router` is a lightweight, intent-aware routing layer for OpenClaw that optimizes LLM usage by dynamically categorizing tasks into `SIMPLE`, `MEDIUM`, `COMPLEX`, and `REASONING` tiers. 
+`bankr-router` is a lightweight, intent-aware routing layer for OpenClaw that optimizes LLM usage by dynamically categorizing tasks into `SIMPLE`, `MEDIUM`, `COMPLEX`, and `REASONING` tiers.
 
 ## Features (v0.9.0)
 - **Local Intent Detection**: Uses `latestPrompt` slicing (first/last 500 characters) to identify coding loops, tool follow-ups, and reasoning tasks without scanning large conversation histories.
@@ -22,6 +22,27 @@ The agent will read the skill first, then follow the instructions in it.
 
 ## Configuration
 See `config.ts` for tier boundaries and model assignments. Adjust `tierBoundaries` to calibrate your specific cost-vs-performance requirements.
+
+---
+
+## ⚡️ Hot Functions
+1. **Auto-Smart Routing**
+   - Simple chat → uses cheap/fast models (e.g., `gemini-3.1-flash-lite`)
+   - Coding questions → routes to code-strong models (e.g., `gemini-3.1-pro` for COMPLEX)
+   - Tool requests → picks tool-capable models
+   - Reasoning tasks → uses high-tier models
+
+2. **Follow-up Smartness**
+   - Uses `x-session-id` header; short follow-ups like "yes", "continue" inherit the previous model selection—no re-guessing.
+
+3. **Auto-Retry When Models Fail**
+   - If a model is busy (429) or times out, the router automatically tries the next best option in the fallback chain.
+
+4. **See What's Happening**
+   - Response headers show exactly what happened:
+     - `x-router-planned-model`
+     - `x-router-final-model`
+     - `x-router-attempted-models`
 
 ## 🚀 **What It Does (Plain English)**
 
