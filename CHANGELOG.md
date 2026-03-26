@@ -5,7 +5,10 @@
 - **Intelligent Routing**: Implemented `latestPrompt` slicing (first 500 + last 500 chars) to prevent conversation history pollution from driving up routing tiers unnecessarily.
 - **Tier-based Cost Optimization**: Shifted routine tool followups and simple chat to `MEDIUM` tier (gemini-3.1-flash-lite) to preserve costs.
 - **Hard Routing Rules**: Forced agentic/code loops to `COMPLEX` tier (gemini-3.1-pro) via local intent detection.
-- **Reliability Enhancements**: Added per-model cooldown isolation and graceful budget guards.
+- **Reliability Enhancements**: 
+    - Added `degraded.ts` for intercepting false-positive 200s (empty/loops) to trigger failover retries.
+    - Added `budget.ts` for strict/graceful cost guards, supporting automated tier downgrades and 402 rejection.
+    - Added per-model cooldown isolation.
 
 ### Fixed
 - Addressed routing leakage where standard coding tasks defaulted to `REASONING`.
