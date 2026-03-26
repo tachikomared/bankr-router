@@ -139,30 +139,30 @@ export const DEFAULT_BANKR_ROUTING_CONFIG: RoutingConfig = {
 
     dimensionWeights: {
       tokenCount: 0.08,
-      codePresence: 0.15,
+      codePresence: 0.18,
       reasoningMarkers: 0.18,
       technicalTerms: 0.10,
       creativeMarkers: 0.05,
       simpleIndicators: 0.02,
-      multiStepPatterns: 0.12,
+      multiStepPatterns: 0.14,
       questionComplexity: 0.05,
-      imperativeVerbs: 0.03,
+      imperativeVerbs: 0.05,
       constraintCount: 0.04,
       outputFormat: 0.03,
       referenceComplexity: 0.02,
       negationComplexity: 0.01,
       domainSpecificity: 0.02,
-      agenticTask: 0.04
+      agenticTask: 0.10
     },
 
     tierBoundaries: {
-      simpleMedium: 0.08,
-      mediumComplex: 0.30,
-      complexReasoning: 0.50
+      simpleMedium: 0.12,
+      mediumComplex: 0.40,
+      complexReasoning: 0.70
     },
 
     confidenceSteepness: 12,
-    confidenceThreshold: 0.7
+    confidenceThreshold: 0.55
   },
 
   tiers: {
@@ -179,6 +179,8 @@ export const DEFAULT_BANKR_ROUTING_CONFIG: RoutingConfig = {
     MEDIUM: {
       primary: "gpt-5.4-mini",
       fallback: [
+        "kimi-k2.5",
+        "minimax-m2.7",
         "deepseek-v3.2",
         "qwen3.5-plus",
         "gemini-3.1-flash-lite",
@@ -188,26 +190,22 @@ export const DEFAULT_BANKR_ROUTING_CONFIG: RoutingConfig = {
       ]
     },
     COMPLEX: {
-      primary: "gpt-5.4",
+      primary: "gemini-3.1-pro",
       fallback: [
         "claude-sonnet-4.6",
-        "gemini-3.1-pro",
+        "gpt-5.4",
+        "gpt-5.2-codex",
         "gemini-3-pro",
         "gpt-5.2",
         "claude-sonnet-4.5",
-        "claude-opus-4.5",
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
       ]
     },
     REASONING: {
-      primary: "gpt-5.4",
+      primary: "gemini-3.1-pro",
       fallback: [
-        "claude-opus-4.6",
         "claude-sonnet-4.6",
-        "gemini-3.1-pro",
+        "gpt-5.4",
         "gpt-5.2",
-        "claude-opus-4.5",
         "gemini-2.5-pro",
       ]
     }
@@ -225,6 +223,8 @@ export const DEFAULT_BANKR_ROUTING_CONFIG: RoutingConfig = {
     MEDIUM: {
       primary: "deepseek-v3.2",
       fallback: [
+        "kimi-k2.5",
+        "minimax-m2.7",
         "qwen3.5-plus",
         "gemini-3.1-flash-lite",
         "grok-4.1-fast",
@@ -275,21 +275,17 @@ export const DEFAULT_BANKR_ROUTING_CONFIG: RoutingConfig = {
     COMPLEX: {
       primary: "gpt-5.4",
       fallback: [
-        "claude-opus-4.6",
         "claude-sonnet-4.6",
         "gemini-3.1-pro",
+        "gpt-5.2-codex",
         "gpt-5.2",
-        "claude-opus-4.5",
-        "gemini-2.5-pro",
       ]
     },
     REASONING: {
-      primary: "claude-opus-4.6",
+      primary: "gpt-5.4",
       fallback: [
-        "gpt-5.4",
         "claude-sonnet-4.6",
         "gemini-3.1-pro",
-        "claude-opus-4.5",
       ]
     }
   },
@@ -306,6 +302,8 @@ export const DEFAULT_BANKR_ROUTING_CONFIG: RoutingConfig = {
     MEDIUM: {
       primary: "qwen3-coder",
       fallback: [
+        "kimi-k2.5",
+        "minimax-m2.7",
         "deepseek-v3.2",
         "gpt-5.4-mini",
         "claude-sonnet-4.6",
@@ -316,19 +314,15 @@ export const DEFAULT_BANKR_ROUTING_CONFIG: RoutingConfig = {
       primary: "claude-sonnet-4.6",
       fallback: [
         "gpt-5.4",
-        "claude-opus-4.6",
-        "gemini-3.1-pro",
         "gpt-5.2-codex",
-        "claude-opus-4.5",
+        "gemini-3.1-pro",
       ]
     },
     REASONING: {
-      primary: "claude-opus-4.6",
+      primary: "gemini-3.1-pro",
       fallback: [
-        "gpt-5.4",
         "claude-sonnet-4.6",
-        "gemini-3.1-pro",
-        "claude-opus-4.5",
+        "gpt-5.4",
       ]
     }
   },

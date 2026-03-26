@@ -11,11 +11,17 @@ The agent will read the skill first, then follow the instructions in it.
 
 ---
 
-# Bankr Router
+# bankr-router
 
-**Smart AI Model Router for OpenClaw + Bankr Gateway**
+`bankr-router` is a lightweight, intent-aware routing layer for OpenClaw that optimizes LLM usage by dynamically categorizing tasks into `SIMPLE`, `MEDIUM`, `COMPLEX`, and `REASONING` tiers. 
 
-Bankr Router sits in front of Bankr and picks the right model for each request. Simple chats go to cheaper models, code goes to stronger coder models, and heavy reasoning gets the bigger brains. You still use one model name — the router handles the mess behind the curtain.
+## Features (v0.9.0)
+- **Local Intent Detection**: Uses `latestPrompt` slicing (first/last 500 characters) to identify coding loops, tool follow-ups, and reasoning tasks without scanning large conversation histories.
+- **Cost Efficiency**: Automatically routes routine tasks to high-performance, cost-effective models (e.g., `gemini-3.1-flash-lite`) while reserving premium models (e.g., `gemini-3.1-pro`) only for high-complexity build or logic loops.
+- **Reliability**: Per-model cooldown isolation (120s for 429s) and local budget guards.
+
+## Configuration
+See `config.ts` for tier boundaries and model assignments. Adjust `tierBoundaries` to calibrate your specific cost-vs-performance requirements.
 
 ## 🚀 **What It Does (Plain English)**
 

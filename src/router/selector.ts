@@ -328,6 +328,7 @@ export function routeBankrRequest(args: {
     tier = "COMPLEX";
   } else {
     const ruleResult = classifyByRules(prompt, systemPrompt, estimatedInputTokens, config.scoring);
+    console.log("RULERESULT:", JSON.stringify(ruleResult));
     tier = ruleResult.tier ?? config.overrides.ambiguousDefaultTier;
     confidence = ruleResult.confidence;
     agenticScore = ruleResult.agenticScore;
@@ -370,10 +371,17 @@ export function routeBankrRequest(args: {
 
   const codeHeavy = looksCodeHeavy(prompt, systemPrompt);
 
-  let reranked = ranked;
-  reranked = rerankForCodeHeavy(reranked, profile);
   const isStructured = structuredOutput || (systemPrompt ?? "").toLowerCase().includes("json") || prompt.toLowerCase().includes("json") || prompt.toLowerCase().includes("yaml");
-  reranked = rerankForToolAndStructured(reranked, profile, hasTools, isStructured);
+  let reranked = ranked;
+  
+  if (tier === "COMPLEX" || tier === "REASONING") {
+      reranked = chain
+        .map(id => ranked.find(r => r.id === id))
+        .filter((r): r is RankedCandidate => !!r);
+  } else {
+      reranked = rerankForCodeHeavy(reranked, profile);
+      reranked = rerankForToolAndStructured(reranked, profile, hasTools, isStructured);
+  }
 
   if (!reranked.length) {
     throw new Error(`No eligible BANKR models with finite cost in tier ${tier}`);

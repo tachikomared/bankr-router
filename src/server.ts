@@ -74,6 +74,9 @@ function parseAuth(req: IncomingMessage): string | null {
 
 function shouldRetry(status: number | null, retryOn: number[]): boolean {
   if (status == null) return true;
+  // Terminal statuses that should NEVER be retried, regardless of config.
+  // 400 = Bad Request, 401 = Unauthorized, 402 = Payment Required, 403 = Forbidden
+  if ([400, 401, 402, 403].includes(status)) return false;
   return retryOn.includes(status);
 }
 
@@ -479,9 +482,10 @@ export function startServer(options: StartServerOptions = {}) {
         
         // Let's assume a generic config for now (could be parsed from headers)
         const isStrictMock = (req.headers["x-mock-budget-reject"]) === "true";
+        const isDowngradeMock = (req.headers["x-mock-budget-downgrade"]) === "true";
         const budgetConfig = { 
             budgetMode: isStrictMock ? 'strict' as const : 'graceful' as const, 
-            maxCostPerRunUsd: isStrictMock ? -1 : 10 
+            maxCostPerRunUsd: (isStrictMock || isDowngradeMock) ? -1 : 10 
         };
         
         const budgetStatus = checkBudget(budgetConfig, sessionBudget);
@@ -525,6 +529,10 @@ export function startServer(options: StartServerOptions = {}) {
             }
           } else {
             responseText = await lastResponse.text();
+            if (req.headers["x-mock-402"] === "true") {
+                lastStatus = 402;
+                responseText = "Payment Required Mock";
+            }
             if (lastStatus === 200 && isDegradedResponse(responseText, body?.response_format?.type === "json_object" || body?.response_format?.type === "json_schema")) {
               lastStatus = 500; // treat as server error so it triggers retry
             }

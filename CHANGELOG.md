@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.9.0] - 2026-03-26
+### Added
+- **Intelligent Routing**: Implemented `latestPrompt` slicing (first 500 + last 500 chars) to prevent conversation history pollution from driving up routing tiers unnecessarily.
+- **Tier-based Cost Optimization**: Shifted routine tool followups and simple chat to `MEDIUM` tier (gemini-3.1-flash-lite) to preserve costs.
+- **Hard Routing Rules**: Forced agentic/code loops to `COMPLEX` tier (gemini-3.1-pro) via local intent detection.
+- **Reliability Enhancements**: Added per-model cooldown isolation and graceful budget guards.
+
+### Fixed
+- Addressed routing leakage where standard coding tasks defaulted to `REASONING`.
+- Fixed token consumption spikes by optimizing cache usage in build loops.
+
 ## v0.7.1
 
 **Correctness & Reliability Release**

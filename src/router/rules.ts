@@ -431,6 +431,70 @@ export function classifyByRules(
     };
   }
 
+
+  const codeHeavyDimension = dimensions.find((d) => d.name === "codePresence");
+  const codeHeavyDetected = (codeHeavyDimension?.score ?? 0) >= 0.8;
+  const hasCodeKeywords = (codeHeavyDimension?.score ?? 0) > 0;
+
+  // 1. Extract the latest user intent to avoid history pollution.
+  // We take the first 500 chars (often system prompts or task headers) 
+  // and the last 500 chars (the actual user message/current tool output).
+  const latestPrompt = userText.length > 1000 
+    ? userText.slice(0, 500) + "\n...\n" + userText.slice(-500)
+    : userText;
+
+  const isPureToolResult = /^\s*({.*}|\[non-text content: toolCall\]|Command still running|Process still running)\s*$/is.test(userText);
+  if (isPureToolResult) {
+    return { score: weightedScore, tier: "SIMPLE", confidence: 0.98, signals: [...signals, "pure-tool-result"], agenticScore, dimensions };
+  }
+
+  const diagnosticFastLane = /^(openclaw\s+(status|health|logs)|status|health check|check logs|process poll|still running\??)$/i.test(userText);
+  if (diagnosticFastLane) {
+    return { score: weightedScore, tier: "SIMPLE", confidence: 0.98, signals: [...signals, "diagnostic-fast-lane"], agenticScore, dimensions };
+  }
+
+  // 2. Promote routine tool followups to simple/medium if there are no errors in the latest output
+  const isRoutineToolFollowup = /^(stdout|stderr|output|result):\s*$/i.test(userText) || (estimatedTokens > 500 && !/(error|failed|exception|trace|panic|cannot find|not found|denied)/i.test(latestPrompt));
+  if (isRoutineToolFollowup && agenticScore < 0.8) {
+    return { score: Math.max(weightedScore, config.tierBoundaries.simpleMedium + 0.05), tier: "MEDIUM", confidence: 0.85, signals: [...signals, "routine-tool-followup"], agenticScore, dimensions };
+  }
+
+  // 3. Keep COMPLEX for actual writing by checking the latest prompt, not the whole history
+  if (agenticScore >= 0.8 && codeHeavyDetected) {
+    const buildRepairLoop = /(build|compile|type error|lint|fix|refactor|patch|verify|npm run build|route\.ts|page\.tsx|middleware)/i.test(latestPrompt);
+    return {
+      score: Math.max(weightedScore, buildRepairLoop ? config.tierBoundaries.mediumComplex + 0.05 : config.tierBoundaries.simpleMedium + 0.05),
+      tier: buildRepairLoop ? "COMPLEX" : "MEDIUM",
+      confidence: 0.78,
+      signals: [...signals, buildRepairLoop ? "build-repair-loop" : "agentic-code-medium"],
+      agenticScore,
+      dimensions
+    };
+  }
+
+  const explicitPremiumAsk = /\b(use opus|claude opus|highest quality|best possible model|premium model|top tier model)\b/i.test(userText);
+  if (explicitPremiumAsk) {
+    return { score: Math.max(weightedScore, config.tierBoundaries.complexReasoning + 0.05), tier: "REASONING", confidence: 0.95, signals: [...signals, "explicit-premium"], agenticScore, dimensions };
+  }
+
+  const expensiveReasoningAsk = /(prove|derive|counterexample|mathematical invariant|formal proof|root cause analysis|tradeoff)/i.test(latestPrompt);
+  if (expensiveReasoningAsk) {
+    return { score: Math.max(weightedScore, config.tierBoundaries.complexReasoning + 0.05), tier: "REASONING", confidence: 0.92, signals: [...signals, "deep-reasoning"], agenticScore, dimensions };
+  }
+
+  const routineCodingTask = hasCodeKeywords && /(fix|refactor|edit|update|typescript|javascript|route\.ts|page\.tsx|middleware)/i.test(latestPrompt);
+  if (routineCodingTask) {
+    const isComplex = /(refactor|fix|type error|compile|write|implement)/i.test(latestPrompt);
+    return {
+      score: Math.max(weightedScore, isComplex ? config.tierBoundaries.mediumComplex + 0.05 : config.tierBoundaries.simpleMedium + 0.05),
+      tier: isComplex ? "COMPLEX" : "MEDIUM",
+      confidence: 0.85,
+      signals: [...signals, isComplex ? "complex-coding" : "medium-coding"],
+      agenticScore,
+      dimensions
+    };
+  }
+
   const { simpleMedium, mediumComplex, complexReasoning } = config.tierBoundaries;
   let tier: Tier;
   let distanceFromBoundary: number;
@@ -453,6 +517,12 @@ export function classifyByRules(
   } else {
     tier = "REASONING";
     distanceFromBoundary = weightedScore - complexReasoning;
+  }
+
+
+  if (agenticScore > 0.1 && tier === "SIMPLE") {
+    tier = "MEDIUM";
+    distanceFromBoundary = 0.05;
   }
 
   const confidence = calibrateConfidence(distanceFromBoundary, config.confidenceSteepness);
